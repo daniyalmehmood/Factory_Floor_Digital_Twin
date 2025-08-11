@@ -154,7 +154,8 @@
   });
 
   function connect() {
-    ws = new WebSocket(`ws://${location.host}/ws`);
+    const wsProtocol = location.protocol === 'https:' ? 'wss' : 'ws';
+    ws = new WebSocket(`${wsProtocol}://${location.host}/ws`);
     ws.onopen = () => { document.getElementById('conn').innerText = 'connected'; };
     ws.onclose = () => { document.getElementById('conn').innerText = 'disconnected'; setTimeout(connect, 1500); };
     ws.onmessage = (evt) => {
