@@ -166,7 +166,7 @@
 
   function sendProtected(actionObj) {
     const key = document.getElementById('api_key').value.trim();
-    if (!key) return alert('Set API key first (top of controls)');
+    if (!key) return alert('Enter API key in the controls section above');
     actionObj.api_key = key;
     ws.send(JSON.stringify(actionObj));
   }
