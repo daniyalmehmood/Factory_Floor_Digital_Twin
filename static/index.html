@@ -19,9 +19,11 @@
     .preset { margin-top:6px; }
   </style>
   <!-- Chart.js CDN -->
+
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"
           integrity="sha384-+wQ6VykBLL8GMDIS9ZhDJW60Trw7O3cu6UytzszbmWzxubUoilKx2oyS9MhUlCT3"
           crossorigin="anonymous"></script>
+
 </head>
 <body>
   <header>
@@ -134,16 +136,16 @@
     apiKey = document.getElementById('api_key').value.trim();
     if (apiKey) {
       apiKeySpan.innerText = "stored";
-      localStorage.setItem('factory_api_key', apiKey);
+      sessionStorage.setItem('factory_api_key', apiKey);
     } else {
       apiKeySpan.innerText = "hidden";
-      localStorage.removeItem('factory_api_key');
+      sessionStorage.removeItem('factory_api_key');
     }
   }
 
   document.getElementById('save_key').onclick = saveApiKeyToLocal;
   document.addEventListener('DOMContentLoaded', () => {
-    const stored = localStorage.getItem('factory_api_key');
+    const stored = sessionStorage.getItem('factory_api_key');
     if (stored) {
       document.getElementById('api_key').value = stored;
       apiKey = stored;
@@ -154,6 +156,7 @@
   });
 
   function connect() {
+
     const wsProtocol = location.protocol === 'https:' ? 'wss' : 'ws';
     ws = new WebSocket(`${wsProtocol}://${location.host}/ws`);
     ws.onopen = () => {
@@ -173,6 +176,7 @@
       // Exponential backoff: double the delay, up to maxReconnectDelay
       reconnectDelay = Math.min(reconnectDelay * 2, maxReconnectDelay);
     };
+
     ws.onmessage = (evt) => {
       const obj = JSON.parse(evt.data);
       if (obj.type === 'metrics') { renderMetrics(obj.payload); }
@@ -181,6 +185,7 @@
 
   function sendProtected(actionObj) {
     const key = document.getElementById('api_key').value.trim();
+
     if (!key) return alert('Enter API key in the controls section above');
     actionObj.api_key = key;
     ws.send(JSON.stringify(actionObj));
@@ -324,6 +329,7 @@
     });
   }
 
+
   // Poll history periodically (every 30s), but only when page is visible
   let historyIntervalId = null;
   function startHistoryPolling() {
@@ -350,6 +356,7 @@
   if (document.visibilityState === 'visible') {
     startHistoryPolling();
   }
+
 </script>
 </body>
 </html>
