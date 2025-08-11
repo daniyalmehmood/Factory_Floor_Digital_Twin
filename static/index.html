@@ -136,16 +136,16 @@
     apiKey = document.getElementById('api_key').value.trim();
     if (apiKey) {
       apiKeySpan.innerText = "stored";
-      localStorage.setItem('factory_api_key', apiKey);
+      sessionStorage.setItem('factory_api_key', apiKey);
     } else {
       apiKeySpan.innerText = "hidden";
-      localStorage.removeItem('factory_api_key');
+      sessionStorage.removeItem('factory_api_key');
     }
   }
 
   document.getElementById('save_key').onclick = saveApiKeyToLocal;
   document.addEventListener('DOMContentLoaded', () => {
-    const stored = localStorage.getItem('factory_api_key');
+    const stored = sessionStorage.getItem('factory_api_key');
     if (stored) {
       document.getElementById('api_key').value = stored;
       apiKey = stored;
