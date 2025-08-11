@@ -1,0 +1,355 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Factory Floor Digital Twin</title>
+  <style>
+    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial; margin: 12px; background: #f4f6f8; }
+    header { display:flex; gap:16px; align-items:center; }
+    .card { background:white; padding:12px; border-radius:10px; box-shadow:0 6px 20px rgba(20,20,40,0.06); margin-bottom:12px; }
+    .grid { display:grid; grid-template-columns: 1fr 420px; gap:12px; }
+    .machines { display:flex; flex-direction:column; gap:8px; max-height:40vh; overflow:auto; }
+    .machine { display:flex; justify-content:space-between; align-items:center; padding:8px; border-radius:8px; border:1px solid #eee; }
+    button { padding:8px 10px; border-radius:8px; border: none; background:#2563eb; color:white; cursor:pointer; }
+    button.secondary { background:#10b981; }
+    footer { margin-top:16px; color:#666; font-size:13px; }
+    label { font-size:13px; color:#333 }
+    input[type="number"], input[type="text"] { padding:6px; border-radius:6px; border:1px solid #ddd; }
+    .controls { display:flex; flex-direction:column; gap:10px; }
+    .preset { margin-top:6px; }
+  </style>
+  <!-- Chart.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"
+          integrity="sha384-+wQ6VykBLL8GMDIS9ZhDJW60Trw7O3cu6UytzszbmWzxubUoilKx2oyS9MhUlCT3"
+          crossorigin="anonymous"></script>
+</head>
+<body>
+  <header>
+    <h1>Factory Floor Digital Twin</h1>
+    <div class="card" style="padding:8px;">
+      <div><strong>Connection:</strong> <span id="conn">disconnected</span></div>
+      <div><strong>Shifts:</strong> <span id="shifts">-</span></div>
+      <div><strong>API Key:</strong> <span id="api_status">hidden</span></div>
+    </div>
+  </header>
+
+  <main class="grid">
+    <section>
+      <div class="card">
+        <h3>Live Metrics</h3>
+        <div><strong>Time:</strong> <span id="time">-</span></div>
+        <div><strong>Total output:</strong> <span id="total_output">0</span></div>
+        <div><strong>Ambient:</strong> <span id="ambient">-</span></div>
+        <div style="margin-top:8px;"><strong>Bottlenecks:</strong> <span id="bottlenecks">none</span></div>
+      </div>
+
+      <div class="card">
+        <h3>Historical Output (last 60 mins)</h3>
+        <canvas id="historyChart" height="120"></canvas>
+      </div>
+
+      <div class="card">
+        <h3>Machines</h3>
+        <div class="machines" id="machines"></div>
+      </div>
+    </section>
+
+    <aside>
+      <div class="card">
+        <h3>Simulate & Controls</h3>
+        <div class="controls">
+          <div>
+            <label>Enter API Key (required for changes):</label><br/>
+            <input type="text" id="api_key" placeholder="api key"/>
+            <button id="save_key">Save key</button>
+          </div>
+
+          <div>
+            <button id="add_shift">Add shift</button>
+            <button id="remove_shift" class="secondary">Remove shift</button>
+          </div>
+
+          <div>
+            <label>Toggle machine</label><br/>
+            <select id="toggle_select" style="width:100%"></select>
+            <button id="toggle_machine">Toggle</button>
+          </div>
+
+          <div>
+            <label>Move equipment</label><br/>
+            <select id="move_select"></select>
+            <input type="number" id="move_pos" min="1" value="1"/>
+            <button id="move_btn">Move</button>
+          </div>
+
+          <div>
+            <label>Set throughput factor</label><br/>
+            <select id="thr_select"></select>
+            <input type="number" id="thr_val" step="0.1" min="0.2" max="2.0" value="1.0"/>
+            <button id="set_thr">Set</button>
+          </div>
+
+          <div>
+            <label>Add new machine</label><br/>
+            <input type="text" id="new_id" placeholder="machine id" value="M_new"/>
+            <input type="number" id="new_rate" placeholder="base rate" value="45"/>
+            <button id="add_machine">Add machine</button>
+          </div>
+
+          <div class="card">
+            <h4>Presets</h4>
+            <button class="preset" id="preset_double_staff">Double staff (add shift)</button>
+            <button class="preset" id="preset_maintenance">Maintenance: toggle M2 off</button>
+            <button class="preset" id="preset_move_slow">Move slow machine earlier</button>
+            <div style="margin-top:6px;">
+              <button id="export_btn">Export config</button>
+              <button id="import_btn">Import config (paste JSON)</button>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Quick tips</h3>
+        <ol>
+          <li>Set API key before making changes (defaults to <code>secret123</code> in local env).</li>
+          <li>Use presets to quickly see the impact of staffing and maintenance.</li>
+          <li>Enable MQTT ingestion in backend to test with real sensor messages.</li>
+        </ol>
+      </div>
+    </aside>
+  </main>
+
+  <footer>
+    Built as a teaching demo — extend with persistence, cloud connectivity, role-based access, and charts.
+  </footer>
+
+<script>
+  let ws;
+  let apiKey = "";
+  const apiKeySpan = document.getElementById('api_status');
+
+  function saveApiKeyToLocal() {
+    apiKey = document.getElementById('api_key').value.trim();
+    if (apiKey) {
+      apiKeySpan.innerText = "stored";
+      localStorage.setItem('factory_api_key', apiKey);
+    } else {
+      apiKeySpan.innerText = "hidden";
+      localStorage.removeItem('factory_api_key');
+    }
+  }
+
+  document.getElementById('save_key').onclick = saveApiKeyToLocal;
+  document.addEventListener('DOMContentLoaded', () => {
+    const stored = localStorage.getItem('factory_api_key');
+    if (stored) {
+      document.getElementById('api_key').value = stored;
+      apiKey = stored;
+      apiKeySpan.innerText = "stored";
+    }
+    connect();
+    fetchHistoryAndRender();
+  });
+
+  function connect() {
+    const wsProtocol = location.protocol === 'https:' ? 'wss' : 'ws';
+    ws = new WebSocket(`${wsProtocol}://${location.host}/ws`);
+    ws.onopen = () => {
+      document.getElementById('conn').innerText = 'connected';
+      // Reset reconnection logic on successful connection
+      reconnectAttempts = 0;
+      reconnectDelay = 1500;
+    };
+    ws.onclose = () => {
+      document.getElementById('conn').innerText = 'disconnected';
+      reconnectAttempts++;
+      if (reconnectAttempts > maxReconnectAttempts) {
+        document.getElementById('conn').innerText = 'disconnected (max retries reached)';
+        return;
+      }
+      setTimeout(connect, reconnectDelay);
+      // Exponential backoff: double the delay, up to maxReconnectDelay
+      reconnectDelay = Math.min(reconnectDelay * 2, maxReconnectDelay);
+    };
+    ws.onmessage = (evt) => {
+      const obj = JSON.parse(evt.data);
+      if (obj.type === 'metrics') { renderMetrics(obj.payload); }
+    };
+  }
+
+  function sendProtected(actionObj) {
+    const key = document.getElementById('api_key').value.trim();
+    if (!key) return alert('Enter API key in the controls section above');
+    actionObj.api_key = key;
+    ws.send(JSON.stringify(actionObj));
+  }
+
+  function renderMetrics(payload) {
+    document.getElementById('time').innerText = payload.time;
+    document.getElementById('total_output').innerText = payload.total_output;
+    document.getElementById('ambient').innerText = `${payload.ambient_temp}°C, ${payload.ambient_humidity}%`;
+    document.getElementById('bottlenecks').innerText = payload.bottlenecks.length ? payload.bottlenecks.join(', ') : 'none';
+    document.getElementById('shifts').innerText = payload.staffing_shifts;
+
+    const machinesDiv = document.getElementById('machines');
+    machinesDiv.innerHTML = '';
+    const toggleSel = document.getElementById('toggle_select');
+    const moveSel = document.getElementById('move_select');
+    const thrSel = document.getElementById('thr_select');
+    [toggleSel, moveSel, thrSel].forEach(s => s.innerHTML = '');
+
+    payload.machines.forEach(m => {
+      const el = document.createElement('div');
+      el.className = 'machine';
+      el.innerHTML = `<div>
+                        <strong>${m.id}</strong><br/>
+                        pos:${m.position} • status:${m.status} • processed:${m.total_processed}
+                      </div>
+                      <div style="text-align:right">
+                        <div>queue: ${m.queue}</div>
+                        <div>throughput: ${m.throughput_factor}</div>
+                      </div>`;
+      machinesDiv.appendChild(el);
+
+      [toggleSel, moveSel, thrSel].forEach(s => {
+        const o = document.createElement('option');
+        o.value = m.id; o.text = m.id; s.appendChild(o);
+      });
+    });
+
+    // update history chart on new data (throttle)
+    if (window.historyChart) {
+      // optionally append last known total_output on chart as new point if desired
+    }
+  }
+
+  // button wiring
+  document.getElementById('add_shift').onclick = () => sendProtected({action:'add_shift'});
+  document.getElementById('remove_shift').onclick = () => sendProtected({action:'remove_shift'});
+  document.getElementById('toggle_machine').onclick = () => {
+    const mid = document.getElementById('toggle_select').value; sendProtected({action:'toggle_machine', machine_id:mid});
+  };
+  document.getElementById('move_btn').onclick = () => {
+    const mid = document.getElementById('move_select').value; const newpos = parseInt(document.getElementById('move_pos').value||1);
+    sendProtected({action:'move_equipment', machine_id:mid, new_position:newpos});
+  };
+  document.getElementById('set_thr').onclick = () => {
+    const mid = document.getElementById('thr_select').value; const val = parseFloat(document.getElementById('thr_val').value||1.0);
+    sendProtected({action:'set_throughput', machine_id:mid, value: val});
+  };
+  document.getElementById('add_machine').onclick = () => {
+    const id = document.getElementById('new_id').value || `M_new_${Date.now()}`; const rate = parseFloat(document.getElementById('new_rate').value||50);
+    sendProtected({action:'add_machine', machine_id:id, base_rate:rate, position:999});
+  };
+
+  // presets
+  document.getElementById('preset_double_staff').onclick = () => sendProtected({action:'add_shift'});
+  document.getElementById('preset_maintenance').onclick = () => sendProtected({action:'toggle_machine', machine_id:'M2_press'});
+  document.getElementById('preset_move_slow').onclick = () => {
+    // move paint earlier (example)
+    sendProtected({action:'move_equipment', machine_id:'M3_paint', new_position:2});
+  };
+
+  // export/import
+  document.getElementById('export_btn').onclick = async () => {
+    const key = document.getElementById('api_key').value.trim();
+    if (!key) return alert('Set API key first');
+    const res = await fetch('/api/export', {method:'POST', headers: {'X-API-Key': key}});
+    if (!res.ok) return alert('Export failed: ' + res.statusText);
+    const data = await res.json();
+    // show as download
+    const blob = new Blob([JSON.stringify(data, null, 2)], {type:'application/json'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = 'twin_export.json'; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  document.getElementById('import_btn').onclick = async () => {
+    const jsonText = prompt("Paste twin config JSON to import:");
+    if (!jsonText) return;
+    let obj;
+    try { obj = JSON.parse(jsonText); } catch(e){ return alert('Invalid JSON'); }
+    const key = document.getElementById('api_key').value.trim();
+    if (!key) return alert('Set API key first');
+    const res = await fetch('/api/import', {
+      method:'POST',
+      headers: {'Content-Type':'application/json', 'X-API-Key': key},
+      body: JSON.stringify(obj)
+    });
+    if (res.ok) alert('Imported successfully'); else alert('Import failed: ' + res.statusText);
+  };
+
+  // ------------- History chart code -------------
+  async function fetchHistoryAndRender() {
+    // fetch last 60 minutes snapshots
+    const res = await fetch('/api/history?minutes=60');
+    const data = await res.json();
+    const labels = [];
+    const outputs = [];
+    for (const s of data.snapshots) {
+      labels.push(new Date(s.time).toLocaleTimeString());
+      outputs.push(s.total_output || 0);
+    }
+    renderHistoryChart(labels, outputs);
+  }
+
+  function renderHistoryChart(labels, outputs) {
+    const ctx = document.getElementById('historyChart').getContext('2d');
+    if (window.historyChart) {
+      window.historyChart.data.labels = labels;
+      window.historyChart.data.datasets[0].data = outputs;
+      window.historyChart.update();
+      return;
+    }
+    window.historyChart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: labels,
+        datasets: [{
+          label: 'Total output',
+          data: outputs,
+          fill: true,
+          tension: 0.3,
+          borderWidth: 2
+        }]
+      },
+      options: {
+        scales: {
+          x: { display: true },
+          y: { beginAtZero: true }
+        }
+      }
+    });
+  }
+
+  // Poll history periodically (every 30s), but only when page is visible
+  let historyIntervalId = null;
+  function startHistoryPolling() {
+    if (!historyIntervalId) {
+      fetchHistoryAndRender(); // fetch immediately on becoming visible
+      historyIntervalId = setInterval(fetchHistoryAndRender, 30000);
+    }
+  }
+  function stopHistoryPolling() {
+    if (historyIntervalId) {
+      clearInterval(historyIntervalId);
+      historyIntervalId = null;
+    }
+  }
+  function handleVisibilityChange() {
+    if (document.visibilityState === 'visible') {
+      startHistoryPolling();
+    } else {
+      stopHistoryPolling();
+    }
+  }
+  document.addEventListener('visibilitychange', handleVisibilityChange);
+  // Start polling if page is initially visible
+  if (document.visibilityState === 'visible') {
+    startHistoryPolling();
+  }
+</script>
+</body>
+</html>
