@@ -11,9 +11,11 @@ Before you begin, ensure you have the following installed on your system:
 1.  **Install project dependencies**: Use `pip` to install the required libraries. This includes FastAPI, Uvicorn, and Jinja2.
 
     ```bash
-    pip install fastapi uvicorn jinja2
+    pip install fastapi uvicorn jinja2 paho-mqtt python-multipart
     ```
 
+    - **paho-mqtt**: Used for MQTT messaging between devices and the backend, enabling real-time communication in the digital twin environment.
+    - **python-multipart**: Required by FastAPI to handle file uploads via multipart/form-data requests.
 2.  **Install Uvicorn with standard extras**: This command installs Uvicorn with additional features needed for development, such as `watchfiles` for hot-reloading.
 
     ```bash
