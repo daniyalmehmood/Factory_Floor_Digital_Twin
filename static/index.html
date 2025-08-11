@@ -19,7 +19,11 @@
     .preset { margin-top:6px; }
   </style>
   <!-- Chart.js CDN -->
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"
+          integrity="sha384-+wQ6VykBLL8GMDIS9ZhDJW60Trw7O3cu6UytzszbmWzxubUoilKx2oyS9MhUlCT3"
+          crossorigin="anonymous"></script>
+
 </head>
 <body>
   <header>
@@ -152,9 +156,27 @@
   });
 
   function connect() {
-    ws = new WebSocket(`ws://${location.host}/ws`);
-    ws.onopen = () => { document.getElementById('conn').innerText = 'connected'; };
-    ws.onclose = () => { document.getElementById('conn').innerText = 'disconnected'; setTimeout(connect, 1500); };
+
+    const wsProtocol = location.protocol === 'https:' ? 'wss' : 'ws';
+    ws = new WebSocket(`${wsProtocol}://${location.host}/ws`);
+    ws.onopen = () => {
+      document.getElementById('conn').innerText = 'connected';
+      // Reset reconnection logic on successful connection
+      reconnectAttempts = 0;
+      reconnectDelay = 1500;
+    };
+    ws.onclose = () => {
+      document.getElementById('conn').innerText = 'disconnected';
+      reconnectAttempts++;
+      if (reconnectAttempts > maxReconnectAttempts) {
+        document.getElementById('conn').innerText = 'disconnected (max retries reached)';
+        return;
+      }
+      setTimeout(connect, reconnectDelay);
+      // Exponential backoff: double the delay, up to maxReconnectDelay
+      reconnectDelay = Math.min(reconnectDelay * 2, maxReconnectDelay);
+    };
+
     ws.onmessage = (evt) => {
       const obj = JSON.parse(evt.data);
       if (obj.type === 'metrics') { renderMetrics(obj.payload); }
@@ -163,7 +185,8 @@
 
   function sendProtected(actionObj) {
     const key = document.getElementById('api_key').value.trim();
-    if (!key) return alert('Set API key first (top of controls)');
+
+    if (!key) return alert('Enter API key in the controls section above');
     actionObj.api_key = key;
     ws.send(JSON.stringify(actionObj));
   }
@@ -306,8 +329,33 @@
     });
   }
 
-  // Poll history periodically (every 30s)
-  setInterval(fetchHistoryAndRender, 30000);
+
+  // Poll history periodically (every 30s), but only when page is visible
+  let historyIntervalId = null;
+  function startHistoryPolling() {
+    if (!historyIntervalId) {
+      fetchHistoryAndRender(); // fetch immediately on becoming visible
+      historyIntervalId = setInterval(fetchHistoryAndRender, 30000);
+    }
+  }
+  function stopHistoryPolling() {
+    if (historyIntervalId) {
+      clearInterval(historyIntervalId);
+      historyIntervalId = null;
+    }
+  }
+  function handleVisibilityChange() {
+    if (document.visibilityState === 'visible') {
+      startHistoryPolling();
+    } else {
+      stopHistoryPolling();
+    }
+  }
+  document.addEventListener('visibilitychange', handleVisibilityChange);
+  // Start polling if page is initially visible
+  if (document.visibilityState === 'visible') {
+    startHistoryPolling();
+  }
 
 </script>
 </body>
