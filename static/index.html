@@ -324,9 +324,32 @@
     });
   }
 
-  // Poll history periodically (every 30s)
-  setInterval(fetchHistoryAndRender, 30000);
-
+  // Poll history periodically (every 30s), but only when page is visible
+  let historyIntervalId = null;
+  function startHistoryPolling() {
+    if (!historyIntervalId) {
+      fetchHistoryAndRender(); // fetch immediately on becoming visible
+      historyIntervalId = setInterval(fetchHistoryAndRender, 30000);
+    }
+  }
+  function stopHistoryPolling() {
+    if (historyIntervalId) {
+      clearInterval(historyIntervalId);
+      historyIntervalId = null;
+    }
+  }
+  function handleVisibilityChange() {
+    if (document.visibilityState === 'visible') {
+      startHistoryPolling();
+    } else {
+      stopHistoryPolling();
+    }
+  }
+  document.addEventListener('visibilitychange', handleVisibilityChange);
+  // Start polling if page is initially visible
+  if (document.visibilityState === 'visible') {
+    startHistoryPolling();
+  }
 </script>
 </body>
 </html>
