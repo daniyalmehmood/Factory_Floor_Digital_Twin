@@ -156,8 +156,23 @@
   function connect() {
     const wsProtocol = location.protocol === 'https:' ? 'wss' : 'ws';
     ws = new WebSocket(`${wsProtocol}://${location.host}/ws`);
-    ws.onopen = () => { document.getElementById('conn').innerText = 'connected'; };
-    ws.onclose = () => { document.getElementById('conn').innerText = 'disconnected'; setTimeout(connect, 1500); };
+    ws.onopen = () => {
+      document.getElementById('conn').innerText = 'connected';
+      // Reset reconnection logic on successful connection
+      reconnectAttempts = 0;
+      reconnectDelay = 1500;
+    };
+    ws.onclose = () => {
+      document.getElementById('conn').innerText = 'disconnected';
+      reconnectAttempts++;
+      if (reconnectAttempts > maxReconnectAttempts) {
+        document.getElementById('conn').innerText = 'disconnected (max retries reached)';
+        return;
+      }
+      setTimeout(connect, reconnectDelay);
+      // Exponential backoff: double the delay, up to maxReconnectDelay
+      reconnectDelay = Math.min(reconnectDelay * 2, maxReconnectDelay);
+    };
     ws.onmessage = (evt) => {
       const obj = JSON.parse(evt.data);
       if (obj.type === 'metrics') { renderMetrics(obj.payload); }
