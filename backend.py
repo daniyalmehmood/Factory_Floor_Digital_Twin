@@ -1,44 +1,51 @@
-# backend.py
-import asyncio
-import json
-import math
-import random
+# backend_issue_15.py — stages + parallel machines + WebSocket + REST
+import asyncio, json, random
 from datetime import datetime
-from typing import Dict, List
+from typing import Dict, List, Optional
+from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi import Request
-from fastapi.templating import Jinja2Templates
+from fastapi.responses import FileResponse, JSONResponse
+from pydantic import BaseModel
 
 app = FastAPI()
-app.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory="static")
 
-# -----------------------
-# DIGITAL TWIN MODEL
-# -----------------------
-# Simple linear production line of machines (M1 -> M2 -> M3 ...)
-# Each machine has:
-# - base_rate: items per minute when ideal
-# - throughput_factor: multiplier (e.g., lowered if moved or misconfigured)
-# - uptime: fraction of time machine is operational (0-1)
-# - queue: backlog waiting for that machine
-# - position: integer position in layout (for "move equipment")
-# - status: "on"/"off"
+# ===== Serve your HTML (issue_15/index.html) =====
+BASE_DIR = Path(__file__).resolve().parent
+INDEX_FILE = BASE_DIR / "index.html"
+
+@app.get("/")
+async def read_root():
+    # Opens your index.html directly
+    return FileResponse(INDEX_FILE)
+
+
+# ========= DIGITAL TWIN MODEL (Stages with parallel machines) =========
+SECONDS_PER_MIN = 60.0
+TICK_SECONDS = 2.0
 
 class Machine:
-    def __init__(self, id, base_rate, position):
+    def __init__(self, id: str, base_rate: float):
         self.id = id
-        self.base_rate = base_rate  # items per minute
-        self.throughput_factor = 1.0
-        self.uptime = 1.0  # fraction
-        self.queue = 0.0
-        self.position = position
-        self.status = "on"
+        self.base_rate = base_rate               # items/min (ideal)
+        self.throughput_factor = 1.0             # multiplier
+        self.uptime = 1.0                        # 0..1
+        self.queue = 0.0                         # waiting items at this machine
+        self.status = "on"                       # on/off
         self.total_processed = 0.0
         self.last_change = datetime.utcnow().isoformat() + "Z"
+
+    def capacity_this_tick(self, delta_seconds: float, staffing_mod: float) -> float:
+        if self.status != "on":
+            self.uptime = max(0.0, self.uptime - 0.001 * (delta_seconds / TICK_SECONDS))
+            return 0.0
+        # tiny random outages / recoveries
+        if random.random() < 0.0005:
+            self.uptime = max(0.5, self.uptime - random.uniform(0.05, 0.2))
+        else:
+            self.uptime = min(1.0, self.uptime + 0.0005 * (delta_seconds / TICK_SECONDS))
+        ideal_per_tick = self.base_rate * (delta_seconds / SECONDS_PER_MIN)
+        return max(0.0, ideal_per_tick * self.throughput_factor * staffing_mod * self.uptime)
 
     def to_dict(self):
         return {
@@ -47,243 +54,257 @@ class Machine:
             "throughput_factor": round(self.throughput_factor, 3),
             "uptime": round(self.uptime, 3),
             "queue": round(self.queue, 2),
-            "position": self.position,
             "status": self.status,
             "total_processed": int(self.total_processed),
         }
 
-# initial machines
-machines: List[Machine] = [
-    Machine("M1_cutter", base_rate=60, position=1),
-    Machine("M2_press", base_rate=50, position=2),
-    Machine("M3_paint", base_rate=40, position=3),
-    Machine("M4_inspect", base_rate=70, position=4),
+class Stage:
+    def __init__(self, id: int, machines: Optional[List[Machine]] = None):
+        self.id = id
+        self.machines: List[Machine] = machines or []
+        self.input_queue = 0.0  # backlog waiting to be routed into machines
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "input_queue": round(self.input_queue, 2),
+            "machines": [m.to_dict() for m in self.machines],
+        }
+
+# Initial line (each stage has one machine; you can add parallel machines later)
+stages: List[Stage] = [
+    Stage(1, [Machine("M1_cutter", 60)]),
+    Stage(2, [Machine("M2_press", 50)]),
+    Stage(3, [Machine("M3_paint", 40)]),
+    Stage(4, [Machine("M4_inspect", 70)]),
 ]
 
-# global twin state
 twin_state = {
-    "staffing_shifts": 1,   # number of active shifts (affects throughput)
+    "staffing_shifts": 1,
     "ambient_temp": 25.0,
     "ambient_humidity": 45.0,
-    "last_output_total": 0,
-    "total_output": 0,      # finished products
+    "total_output": 0,
     "time": datetime.utcnow().isoformat() + "Z",
 }
 
-# -----------------------
-# HELPER: compute per-tick processing
-# -----------------------
-# We run ticks every tick_seconds. base_rate is per minute, so convert.
-
-TICK_SECONDS = 2.0  # update interval in seconds
-SECONDS_PER_MIN = 60.0
-
 def compute_staffing_modifier(shifts: int) -> float:
-    # More shifts -> more staff -> higher throughput, with diminishing returns.
+    # More shifts => more staff with diminishing returns
     return 1.0 + 0.25 * (shifts - 1)
 
-def process_production_tick(delta_seconds: float):
-    """Simulate one tick across the pipeline."""
-    global twin_state, machines
+# ===== Core simulation =====
+def route_to_shortest_queue(stage: Stage, amount: float):
+    """Route items from stage.input_queue to parallel machines by shortest queue."""
+    if amount <= 0 or not stage.machines:
+        return
+    chunk = max(0.1, amount / 10.0)  # small chunks → more stable
+    remaining = amount
+    while remaining > 1e-6:
+        m = min(stage.machines, key=lambda x: x.queue)
+        push = min(chunk, remaining)
+        m.queue += push
+        remaining -= push
 
+def process_production_tick(delta_seconds: float):
     staffing_mod = compute_staffing_modifier(twin_state["staffing_shifts"])
 
-    # Ambient drift
-    twin_state["ambient_temp"] += random.uniform(-0.05, 0.05)
-    twin_state["ambient_humidity"] += random.uniform(-0.1, 0.1)
-    twin_state["ambient_temp"] = round(max(15, min(40, twin_state["ambient_temp"])), 2)
-    twin_state["ambient_humidity"] = round(max(20, min(80, twin_state["ambient_humidity"])), 2)
+    # ambient drift
+    twin_state["ambient_temp"] = round(min(40, max(15, twin_state["ambient_temp"] + random.uniform(-0.05, 0.05))), 2)
+    twin_state["ambient_humidity"] = round(min(80, max(20, twin_state["ambient_humidity"] + random.uniform(-0.1, 0.1))), 2)
 
-    # For each machine, compute how many items it processed this tick from its queue or upstream
-    # Order machines by position for pipeline
-    machines_sorted = sorted(machines, key=lambda m: m.position)
-    new_output = 0.0
+    # arrivals into stage 0 depend on staffing and stage0 capacity
+    if stages:
+        s0 = stages[0]
+        ideal = sum(m.base_rate for m in s0.machines) * (delta_seconds / SECONDS_PER_MIN)
+        arrivals = max(0.0, random.gauss(ideal * staffing_mod, ideal * 0.2))
+        s0.input_queue += arrivals
 
-    for i, m in enumerate(machines_sorted):
-        if m.status != "on":
-            # If machine is off, nothing processes
-            m.uptime = max(0.0, m.uptime - 0.001 * (delta_seconds / TICK_SECONDS))
-            continue
+    # route stage inputs to parallel machines
+    for st in stages:
+        if st.input_queue > 0:
+            amt = st.input_queue
+            st.input_queue = 0.0
+            route_to_shortest_queue(st, amt)
 
-        # simulate random small failures impacting uptime
-        if random.random() < 0.0005:  # very small chance of transient drop
-            m.uptime = max(0.5, m.uptime - random.uniform(0.05, 0.2))
+    # process each stage
+    new_finished = 0.0
+    for idx, st in enumerate(stages):
+        processed_sum = 0.0
+        for m in st.machines:
+            cap = m.capacity_this_tick(delta_seconds, staffing_mod)
+            take = min(m.queue, cap)
+            m.queue -= take
+            m.total_processed += take
+            processed_sum += take
+            m.throughput_factor = min(1.8, max(0.2, m.throughput_factor + random.uniform(-0.001, 0.001)))
+        if idx < len(stages) - 1:
+            stages[idx + 1].input_queue += processed_sum
         else:
-            # recover slowly to 1.0
-            m.uptime = min(1.0, m.uptime + 0.0005 * (delta_seconds / TICK_SECONDS))
+            new_finished += processed_sum
 
-        # available processing capacity this tick (items)
-        # base_rate (items per minute) -> per tick: base_rate * (delta_seconds/60)
-        ideal_per_tick = m.base_rate * (delta_seconds / SECONDS_PER_MIN)
-        effective_rate = ideal_per_tick * m.throughput_factor * staffing_mod * m.uptime
-
-        # Machine pulls from its own queue first (backlog)
-        # If first machine, it generates new raw items (arrivals)
-        if i == 0:
-            # generate new raw items based on upstream feed (random arrivals influenced by staffing)
-            arrivals = max(0.0, random.gauss(ideal_per_tick * staffing_mod, ideal_per_tick * 0.2))
-            m.queue += arrivals
-
-        # processable items = min(queue, capacity)
-        processed = min(m.queue, max(0.0, effective_rate))
-        # reduce queue
-        m.queue -= processed
-        m.total_processed += processed
-
-        # push processed to next machine's queue, or to output if last
-        if i < len(machines_sorted) - 1:
-            machines_sorted[i + 1].queue += processed
-        else:
-            new_output += processed
-
-        # small random fluctuation to throughput_factor to simulate wear or maintenance
-        m.throughput_factor += random.uniform(-0.001, 0.001)
-        m.throughput_factor = max(0.2, min(1.8, m.throughput_factor))
-
-    twin_state["total_output"] += int(new_output)
+    twin_state["total_output"] += int(new_finished)
     twin_state["time"] = datetime.utcnow().isoformat() + "Z"
 
-# -----------------------
-# WEBSOCKET MANAGER
-# -----------------------
+# ===== WebSocket broadcasting =====
 class ConnectionManager:
     def __init__(self):
         self.active: List[WebSocket] = []
-
     async def connect(self, websocket: WebSocket):
-        await websocket.accept()
-        self.active.append(websocket)
-
+        await websocket.accept(); self.active.append(websocket)
     def disconnect(self, websocket: WebSocket):
-        if websocket in self.active:
-            self.active.remove(websocket)
-
+        if websocket in self.active: self.active.remove(websocket)
     async def broadcast(self, message: Dict):
         data = json.dumps(message)
         living = []
         for ws in list(self.active):
             try:
-                await ws.send_text(data)
-                living.append(ws)
+                await ws.send_text(data); living.append(ws)
             except Exception:
-                # drop broken websockets
                 pass
         self.active = living
 
 manager = ConnectionManager()
 
-# -----------------------
-# BACKGROUND TASK: simulator broadcaster
-# -----------------------
+def current_metrics_payload():
+    machines_flat = []
+    for st in stages:
+        for m in st.machines:
+            md = m.to_dict(); md["stage_id"] = st.id
+            machines_flat.append(md)
+    bnecks = []
+    for st in stages:
+        if st.input_queue > 5: bnecks.append(f"Stage{st.id}:input")
+        for m in st.machines:
+            if m.queue > 5: bnecks.append(m.id)
+    return {
+        "time": twin_state["time"],
+        "ambient_temp": twin_state["ambient_temp"],
+        "ambient_humidity": twin_state["ambient_humidity"],
+        "total_output": twin_state["total_output"],
+        "stages": [s.to_dict() for s in stages],
+        "machines": machines_flat,
+        "bottlenecks": bnecks,
+        "staffing_shifts": twin_state["staffing_shifts"],
+    }
+
 async def simulator_loop():
-    """Run the production simulation and broadcast the twin state every tick."""
     while True:
         process_production_tick(TICK_SECONDS)
-        # compute simple metrics for dashboard
-        machines_snapshot = [m.to_dict() for m in sorted(machines, key=lambda x: x.position)]
-        # find bottlenecks (high queue)
-        bottlenecks = [m["id"] for m in machines_snapshot if m["queue"] > max(2.0, 0.5 * (m["base_rate"]/SECONDS_PER_MIN) * TICK_SECONDS)]
-        metrics = {
-            "time": twin_state["time"],
-            "ambient_temp": twin_state["ambient_temp"],
-            "ambient_humidity": twin_state["ambient_humidity"],
-            "total_output": twin_state["total_output"],
-            "machines": machines_snapshot,
-            "bottlenecks": bottlenecks,
-            "staffing_shifts": twin_state["staffing_shifts"],
-        }
-        # broadcast to all dashboards
-        await manager.broadcast({"type": "metrics", "payload": metrics})
+        await manager.broadcast({"type": "metrics", "payload": current_metrics_payload()})
         await asyncio.sleep(TICK_SECONDS)
 
 @app.on_event("startup")
 async def startup_event():
-    # start background simulator
-    loop = asyncio.get_event_loop()
-    loop.create_task(simulator_loop())
+    asyncio.get_event_loop().create_task(simulator_loop())
 
-# -----------------------
-# WS endpoint for dashboard clients (receive commands, send metrics)
-# -----------------------
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
     try:
-        # on connect, send immediate snapshot
-        await websocket.send_text(json.dumps({"type": "metrics", "payload": {
-            "time": twin_state["time"],
-            "ambient_temp": twin_state["ambient_temp"],
-            "ambient_humidity": twin_state["ambient_humidity"],
-            "total_output": twin_state["total_output"],
-            "machines": [m.to_dict() for m in sorted(machines, key=lambda x: x.position)],
-            "bottlenecks": [],
-            "staffing_shifts": twin_state["staffing_shifts"],
-        }}))
+        await websocket.send_text(json.dumps({"type": "metrics", "payload": current_metrics_payload()}))
         while True:
-            msg = await websocket.receive_text()
-            try:
-                obj = json.loads(msg)
-            except Exception:
-                await websocket.send_text(json.dumps({"type":"error","payload":"invalid json"}))
-                continue
-
-            # Handle commands: add_shift, remove_shift, move_equipment, toggle_machine, set_throughput
+            obj = json.loads(await websocket.receive_text())
             action = obj.get("action")
+
             if action == "add_shift":
                 twin_state["staffing_shifts"] = min(3, twin_state["staffing_shifts"] + 1)
+
             elif action == "remove_shift":
                 twin_state["staffing_shifts"] = max(1, twin_state["staffing_shifts"] - 1)
-            elif action == "move_equipment":
-                mid = obj.get("machine_id")
-                new_pos = obj.get("new_position")
-                for m in machines:
-                    if m.id == mid:
-                        m.position = int(new_pos)
-                        m.last_change = datetime.utcnow().isoformat() + "Z"
-                        break
-                # reassign positions if duplicate: sort then renumber contiguous
-                machines_sorted = sorted(machines, key=lambda x: x.position)
-                for idx, m in enumerate(machines_sorted, start=1):
-                    m.position = idx
+
             elif action == "toggle_machine":
                 mid = obj.get("machine_id")
-                for m in machines:
-                    if m.id == mid:
-                        m.status = "off" if m.status == "on" else "on"
-                        m.last_change = datetime.utcnow().isoformat() + "Z"
-                        break
+                for st in stages:
+                    for m in st.machines:
+                        if m.id == mid:
+                            m.status = "off" if m.status == "on" else "on"
+                            m.last_change = datetime.utcnow().isoformat() + "Z"
+
             elif action == "set_throughput":
-                mid = obj.get("machine_id")
-                val = float(obj.get("value", 1.0))
-                for m in machines:
-                    if m.id == mid:
-                        m.throughput_factor = max(0.2, min(2.0, val))
-                        m.last_change = datetime.utcnow().isoformat() + "Z"
-                        break
-            elif action == "add_machine":
-                new_id = obj.get("machine_id", f"M_new_{len(machines)+1}")
-                pos = int(obj.get("position", len(machines)+1))
+                mid = obj.get("machine_id"); val = float(obj.get("value", 1.0))
+                for st in stages:
+                    for m in st.machines:
+                        if m.id == mid:
+                            m.throughput_factor = max(0.2, min(2.0, val))
+                            m.last_change = datetime.utcnow().isoformat() + "Z"
+
+            elif action == "add_parallel_machine":
+                stage_index = int(obj.get("stage_index"))
+                new_id = obj.get("machine_id", f"M_new_{stage_index}_{random.randint(100,999)}")
                 base_rate = float(obj.get("base_rate", 50))
-                machines.append(Machine(new_id, base_rate, pos))
-                # normalize positions
-                machines_sorted = sorted(machines, key=lambda x: x.position)
-                for idx, m in enumerate(machines_sorted, start=1):
-                    m.position = idx
+                st = next((s for s in stages if s.id == stage_index), None)
+                if not st:
+                    await websocket.send_text(json.dumps({"type":"error","payload":"stage not found"})); continue
+                if any(m.id == new_id for m in st.machines):
+                    await websocket.send_text(json.dumps({"type":"error","payload":"machine id exists"})); continue
+                st.machines.append(Machine(new_id, base_rate))
+
+            elif action == "delete_machine":
+                mid = obj.get("machine_id")
+                found = False
+                for st in stages:
+                    for i, m in enumerate(list(st.machines)):
+                        if m.id == mid:
+                            st.input_queue += m.queue
+                            del st.machines[i]
+                            found = True
+                            break
+                    if found: break
+                if not found:
+                    await websocket.send_text(json.dumps({"type":"error","payload":"machine not found"})); continue
+
+            elif action == "add_machine":  # adds a brand-new STAGE at the end
+                new_id = obj.get("machine_id", f"M_new_{len(stages)+1}")
+                base_rate = float(obj.get("base_rate", 50))
+                stages.append(Stage(len(stages)+1, [Machine(new_id, base_rate)]))
+
             else:
                 await websocket.send_text(json.dumps({"type":"error","payload":"unknown action"}))
                 continue
 
-            # after handling command, send a state update
-            await manager.broadcast({"type": "metrics", "payload": {
-                "time": twin_state["time"],
-                "ambient_temp": twin_state["ambient_temp"],
-                "ambient_humidity": twin_state["ambient_humidity"],
-                "total_output": twin_state["total_output"],
-                "machines": [m.to_dict() for m in sorted(machines, key=lambda x: x.position)],
-                "bottlenecks": [m.id for m in machines if m.queue > 5],
-                "staffing_shifts": twin_state["staffing_shifts"],
-            }})
+            await manager.broadcast({"type": "metrics", "payload": current_metrics_payload()})
+
     except WebSocketDisconnect:
         manager.disconnect(websocket)
     except Exception:
         manager.disconnect(websocket)
+
+
+# ===== REST API (for acceptance criteria) =====
+class NewMachineReq(BaseModel):
+    machine_id: str
+    base_rate: float = 50.0
+
+@app.get("/api/stages")
+async def api_get_stages():
+    return {"stages": [s.to_dict() for s in stages]}
+
+@app.get("/api/machines")
+async def api_get_machines():
+    machines_flat = []
+    for st in stages:
+        for m in st.machines:
+            md = m.to_dict(); md["stage_id"] = st.id
+            machines_flat.append(md)
+    return {"machines": machines_flat}
+
+@app.post("/api/stages/{stage_id}/machines")
+async def api_add_parallel_machine(stage_id: int, req: NewMachineReq):
+    st = next((s for s in stages if s.id == stage_id), None)
+    if not st:
+        return JSONResponse({"ok": False, "error": "stage not found"}, status_code=404)
+    if any(m.id == req.machine_id for m in st.machines):
+        return JSONResponse({"ok": False, "error": "machine id exists"}, status_code=409)
+    st.machines.append(Machine(req.machine_id, req.base_rate))
+    await manager.broadcast({"type": "metrics", "payload": current_metrics_payload()})
+    return {"ok": True, "stage": st.to_dict()}
+
+@app.delete("/api/machines/{machine_id}")
+async def api_delete_machine(machine_id: str):
+    for st in stages:
+        for i, m in enumerate(list(st.machines)):
+            if m.id == machine_id:
+                st.input_queue += m.queue
+                del st.machines[i]
+                await manager.broadcast({"type": "metrics", "payload": current_metrics_payload()})
+                return {"ok": True, "stage_id": st.id}
+    return JSONResponse({"ok": False, "error": "machine not found"}, status_code=404)

@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Factory Digital Twin - Parallel Stages</title>
+  <!-- Socket.IO client -->
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet">
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);min-height:100vh;color:#111}
+    .container{max-width:1300px;margin:0 auto;padding:20px}
+    .card{background:#fff;border-radius:16px;padding:20px;margin-bottom:20px;box-shadow:0 10px 30px rgba(0,0,0,.08)}
+    .header{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:20px}
+    .title{font-size:28px;background:linear-gradient(135deg,#667eea,#764ba2);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+    .status{display:flex;gap:10px;align-items:center}
+    .dot{width:10px;height:10px;border-radius:50%;background:#ef4444}
+    .dot.ok{background:#10b981}
+    .grid{display:grid;grid-template-columns:1fr 360px;gap:20px}
+    .metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
+    .metric{background:#f7f7fb;border:1px solid #e8e8f5;border-radius:12px;padding:16px;text-align:center}
+    .metric .v{font-size:22px;font-weight:700;color:#6b72e1}
+    .metric .l{font-size:12px;color:#64748b}
+    .stage{background:linear-gradient(135deg,#f1f5f9,#e2e8f0);border:1px solid #e5e7eb;border-radius:12px;padding:16px;margin-bottom:12px}
+    .stage-h{display:flex;justify-content:space-between;margin-bottom:10px}
+    .stage-q{background:#eef2ff;color:#4f46e5;border-radius:999px;padding:4px 10px;font-size:12px}
+    .machines{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px}
+    .m{background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:14px;position:relative}
+    .m::before{content:"";position:absolute;left:0;top:0;height:4px;width:100%;background:linear-gradient(90deg,#10b981,#059669)}
+    .m.off::before{background:linear-gradient(90deg,#ef4444,#dc2626)}
+    .m-h{display:flex;justify-content:space-between;margin-bottom:8px}
+    .m-id{font-weight:600}
+    .badge{font-size:11px;padding:3px 8px;border-radius:999px}
+    .on{background:#ecfdf5;color:#059669}.off{background:#fee2e2;color:#dc2626}
+    .stats{display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:12px;color:#374151}
+    .row{display:flex;justify-content:space-between}
+    .controls .row{gap:8px;align-items:end}
+    .controls input,.controls select{width:100%;padding:10px;border:1px solid #d1d5db;border-radius:8px}
+    .btn{padding:10px 14px;border:none;border-radius:8px;color:#fff;background:#667eea;cursor:pointer}
+    .btn.secondary{background:#10b981}.btn.danger{background:#ef4444}
+    .bottle{background:#fff0f0;border:1px solid #ffc9c9;color:#b91c1c;border-radius:10px;padding:10px;margin-top:10px}
+    @media(max-width:1024px){.grid{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1 class="title"><i class="fa-solid fa-industry"></i> Factory Digital Twin</h1>
+      <div class="card" style="display:flex;gap:16px;align-items:center">
+        <div class="status"><span class="dot" id="connDot"></span> <span id="connText">Disconnected</span></div>
+        <div>| Shifts: <b id="shifts">-</b></div>
+        <div>| Time: <b id="time">-</b></div>
+      </div>
+    </div>
+    <div class="grid">
+      <section>
+        <div class="card">
+          <h3 style="margin-bottom:12px">Live Metrics</h3>
+          <div class="metrics">
+            <div class="metric"><div class="v" id="totalOutput">0</div><div class="l">Total Output</div></div>
+            <div class="metric"><div class="v" id="ambientTemp">-</div><div class="l">Temp (°C)</div></div>
+            <div class="metric"><div class="v" id="ambientHumidity">-</div><div class="l">Humidity (%)</div></div>
+          </div>
+          <div id="bottlenecks" class="bottle" style="display:none"></div>
+        </div>
+        <div class="card">
+          <h3 style="margin-bottom:12px">Production Stages</h3>
+          <div id="stages"></div>
+        </div>
+      </section>
+      <aside>
+        <div class="card controls">
+          <h3 style="margin-bottom:10px">Controls</h3>
+          <div class="row">
+            <button class="btn secondary" id="addShift">Add shift</button>
+            <button class="btn danger" id="removeShift">Remove shift</button>
+          </div>
+          <div class="row">
+            <div style="flex:1">
+              <label>Toggle machine</label>
+              <select id="toggleSelect"></select>
+            </div>
+            <button class="btn" id="toggleBtn">Toggle</button>
+          </div>
+          <div class="row">
+            <div style="flex:1">
+              <label>Set throughput (0.2 - 2.0)</label>
+              <div class="row">
+                <select id="thrSelect" style="flex:1"></select>
+                <input id="thrVal" type="number" min="0.2" max="2.0" step="0.1" value="1.0" style="width:110px"/>
+              </div>
+            </div>
+            <button class="btn" id="thrBtn">Set</button>
+          </div>
+          <div class="row">
+            <div style="flex:1">
+              <label>Add parallel machine</label>
+              <div class="row">
+                <select id="stageSelect" style="flex:1"></select>
+                <input id="newId" placeholder="M_parallel" />
+                <input id="newRate" type="number" value="50" min="1" style="width:110px"/>
+              </div>
+            </div>
+            <button class="btn secondary" id="addParallelBtn">Add</button>
+          </div>
+          <div class="row">
+            <div style="flex:1">
+              <label>Delete machine</label>
+              <select id="delSelect"></select>
+            </div>
+            <button class="btn danger" id="delBtn">Delete</button>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </div>
+  <script>
+    // اتصال Socket.IO على نفس السيرفر
+    const socket = io(window.location.origin, {
+      path: "/socket.io",
+      transports: ["websocket", "polling"]
+    });
+    socket.on("connect", () => {
+      document.getElementById("connDot").classList.add("ok");
+      document.getElementById("connText").innerText = "Connected";
+    });
+    socket.on("disconnect", () => {
+      document.getElementById("connDot").classList.remove("ok");
+      document.getElementById("connText").innerText = "Disconnected";
+    });
+    socket.on("metrics", (data) => {
+      if (data && data.type === "metrics") renderMetrics(data.payload);
+    });
+    socket.on("error", (e) => {
+      console.error("Server error:", e);
+      alert(e?.payload || "Server error");
+    });
+    function sendAction(obj){
+      if(!socket.connected) return alert("Not connected");
+      socket.emit("action", obj);
+    }
+    // ربط الأزرار
+    document.getElementById("addShift").onclick = ()=> sendAction({action:"add_shift"});
+    document.getElementById("removeShift").onclick = ()=> sendAction({action:"remove_shift"});
+    document.getElementById("toggleBtn").onclick = ()=>{
+      const id = document.getElementById("toggleSelect").value;
+      if(!id) return alert("Select a machine");
+      sendAction({action:"toggle_machine", machine_id:id});
+    };
+    document.getElementById("thrBtn").onclick = ()=>{
+      const id = document.getElementById("thrSelect").value;
+      const v = parseFloat(document.getElementById("thrVal").value||"1.0");
+      if(!id) return alert("Select a machine");
+      if(v<0.2||v>2.0) return alert("Value 0.2–2.0");
+      sendAction({action:"set_throughput", machine_id:id, value:v});
+    };
+    document.getElementById("addParallelBtn").onclick = ()=>{
+      const stg = parseInt(document.getElementById("stageSelect").value||"0");
+      const id = document.getElementById("newId").value.trim();
+      const rate = parseFloat(document.getElementById("newRate").value||"50");
+      if(!stg) return alert("Select a stage");
+      sendAction({action:"add_parallel_machine", stage_index:stg, machine_id:id||undefined, base_rate:rate});
+      document.getElementById("newId").value="";
+    };
+    document.getElementById("delBtn").onclick = ()=>{
+      const id = document.getElementById("delSelect").value;
+      if(!id) return alert("Select a machine");
+      if(confirm(`Delete ${id}?`)) sendAction({action:"delete_machine", machine_id:id});
+    };
+    // رسم البيانات
+    function renderMetrics(p){
+      // أعلى الصفحة
+      document.getElementById("time").innerText = new Date(p.time).toLocaleTimeString();
+      document.getElementById("shifts").innerText = p.staffing_shifts;
+      document.getElementById("totalOutput").innerText = p.total_output.toLocaleString();
+      document.getElementById("ambientTemp").innerText = p.ambient_temp;
+      document.getElementById("ambientHumidity").innerText = p.ambient_humidity;
+      // اختناقات
+      const b = document.getElementById("bottlenecks");
+      if(p.bottlenecks && p.bottlenecks.length){
+        b.style.display="block"; b.innerText = "Bottlenecks: " + p.bottlenecks.join(", ");
+      } else b.style.display="none";
+      // مراحل
+      const stagesDiv = document.getElementById("stages");
+      stagesDiv.innerHTML = "";
+      p.stages.forEach(st=>{
+        const s = document.createElement("div"); s.className="stage";
+        const h = document.createElement("div"); h.className="stage-h";
+        h.innerHTML = `<div><b>Stage ${st.id}</b></div><div class="stage-q">Queue: ${st.input_queue.toFixed(1)}</div>`;
+        const mg = document.createElement("div"); mg.className="machines";
+        st.machines.forEach(m=>{
+          const el = document.createElement("div"); el.className="m"+(m.status==="off"?" off":"");
+          el.innerHTML = `
+            <div class="m-h">
+              <div class="m-id">${m.id}</div>
+              <span class="badge ${m.status==='on'?'on':'off'}">${m.status}</span>
+            </div>
+            <div class="stats">
+              <div class="row"><span>Queue</span><b>${m.queue.toFixed(1)}</b></div>
+              <div class="row"><span>Processed</span><b>${m.total_processed}</b></div>
+              <div class="row"><span>Throughput</span><b>${m.throughput_factor.toFixed(2)}x</b></div>
+              <div class="row"><span>Uptime</span><b>${(m.uptime*100).toFixed(1)}%</b></div>
+            </div>`;
+          mg.appendChild(el);
+        });
+        s.appendChild(h); s.appendChild(mg); stagesDiv.appendChild(s);
+      });
+      // تحديث القوائم
+      const machines = p.machines || [];
+      const fills = (id, opts)=>{
+        const sel = document.getElementById(id);
+        const keep = sel.value; sel.innerHTML="";
+        machines.forEach(m=>{
+          const o = document.createElement("option");
+          o.value = m.id; o.text = `${m.id} (Stage ${m.stage_id})`; sel.appendChild(o);
+        });
+        if(keep) sel.value = keep;
+      };
+      fills("toggleSelect"); fills("thrSelect"); fills("delSelect");
+      const stageSel = document.getElementById("stageSelect");
+      const keepStage = stageSel.value; stageSel.innerHTML="";
+      p.stages.forEach(st=>{
+        const o = document.createElement("option"); o.value = st.id; o.text = `Stage ${st.id}`; stageSel.appendChild(o);
+      });
+      if(keepStage) stageSel.value = keepStage;
+    }
+  </script>
+</body>
+</html>
