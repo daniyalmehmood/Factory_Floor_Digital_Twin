@@ -54,6 +54,10 @@ class MachineIn(BaseModel):
     base_rate: float = 50.0
     position: int = 1
 
+class PresetIn(BaseModel):
+    name: str
+    description: str = ""
+
 # -------------------
 # DATABASE (SQLite)
 # -------------------
@@ -263,6 +267,7 @@ def reset_simulation():
     twin_state["time"] = datetime.utcnow().isoformat() + "Z"
 
 def normalize_machine_positions():
+    """Ensure machine positions are sequential starting from 1"""
     sorted_machines = sorted(machines.values(), key=lambda x: x.position)
     for idx, machine in enumerate(sorted_machines, start=1):
         machine.position = idx
@@ -395,6 +400,129 @@ async def delete_machine(machine_id: str):
     return {'status': 'deleted', 'id': machine_id}
 
 # -----------------------
+# PRESET ENDPOINTS
+# -----------------------
+@app.get('/api/presets')
+async def list_presets():
+    with db_lock:
+        cur = db_conn.cursor()
+        cur.execute("SELECT id, name, description, created_at FROM presets ORDER BY created_at DESC")
+        rows = cur.fetchall()
+    
+    presets = []
+    for row in rows:
+        presets.append({
+            "id": row[0],
+            "name": row[1],
+            "description": row[2] or "",
+            "created_at": row[3]
+        })
+    return presets
+
+@app.post('/api/presets', status_code=201)
+async def create_preset(payload: PresetIn, x_api_key: str = Header(None)):
+    if x_api_key != API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid API Key")
+    
+    try:
+        name = validate_preset_name(payload.name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    
+    config = {
+        "twin_state": twin_state,
+        "machines": machines_snapshot()
+    }
+    
+    try:
+        with db_lock:
+            cur = db_conn.cursor()
+            cur.execute(
+                "INSERT INTO presets (name, description, config, created_at) VALUES (?, ?, ?, ?)",
+                (name, payload.description, json.dumps(config), datetime.utcnow().isoformat() + "Z")
+            )
+            db_conn.commit()
+            preset_id = cur.lastrowid
+    except sqlite3.IntegrityError:
+        raise HTTPException(status_code=400, detail="Preset name already exists")
+    
+    return {
+        "id": preset_id,
+        "name": name,
+        "description": payload.description,
+        "created_at": datetime.utcnow().isoformat() + "Z"
+    }
+
+@app.post('/api/presets/{preset_id}/load')
+async def load_preset(preset_id: int, x_api_key: str = Header(None)):
+    if x_api_key != API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid API Key")
+    
+    with db_lock:
+        cur = db_conn.cursor()
+        cur.execute("SELECT name, config FROM presets WHERE id = ?", (preset_id,))
+        row = cur.fetchone()
+    
+    if not row:
+        raise HTTPException(status_code=404, detail="Preset not found")
+    
+    try:
+        config = json.loads(row[1])
+        
+        # Load machines
+        if "machines" in config:
+            machines.clear()
+            for m_data in config["machines"]:
+                machine = Machine(
+                    m_data["id"],
+                    m_data.get("name", m_data["id"]),
+                    float(m_data.get("base_rate", 50)),
+                    int(m_data.get("position", 1))
+                )
+                machine.from_dict(m_data)
+                machines[machine.id] = machine
+            
+            normalize_machine_positions()
+        
+        # Load twin state
+        if "twin_state" in config:
+            ts = config["twin_state"]
+            twin_state["staffing_shifts"] = int(ts.get("staffing_shifts", 1))
+            twin_state["ambient_temp"] = float(ts.get("ambient_temp", 25.0))
+            twin_state["ambient_humidity"] = float(ts.get("ambient_humidity", 45.0))
+        
+        # Broadcast update
+        current_payload = {
+            "time": twin_state["time"],
+            "ambient_temp": twin_state["ambient_temp"],
+            "ambient_humidity": twin_state["ambient_humidity"],
+            "total_output": twin_state["total_output"],
+            "machines": machines_snapshot(),
+            "bottlenecks": [],
+            "staffing_shifts": twin_state["staffing_shifts"],
+        }
+        await manager.broadcast({"type": "metrics", "payload": current_payload})
+        
+        return {"message": f"Loaded preset: {row[0]}"}
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error loading preset: {str(e)}")
+
+@app.delete('/api/presets/{preset_id}')
+async def delete_preset(preset_id: int, x_api_key: str = Header(None)):
+    if x_api_key != API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid API Key")
+    
+    with db_lock:
+        cur = db_conn.cursor()
+        cur.execute("DELETE FROM presets WHERE id = ?", (preset_id,))
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Preset not found")
+        db_conn.commit()
+    
+    return {"message": "Preset deleted"}
+
+# -----------------------
 # BACKGROUND TASK
 # -----------------------
 async def simulator_loop():
@@ -428,7 +556,7 @@ async def startup_event():
     asyncio.create_task(simulator_loop())
 
 # -----------------------
-# WEBSOCKET ENDPOINT
+# WEBSOCKET ENDPOINT - Enhanced with better error handling
 # -----------------------
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -454,8 +582,9 @@ async def websocket_endpoint(websocket: WebSocket):
                 continue
 
             action = obj.get("action")
-            key = obj.get("api_key") or ""
+            key = obj.get("api_key", "")
             
+            # Unprotected actions
             if action == "get_snapshot":
                 snapshot = {
                     "time": twin_state["time"],
@@ -472,10 +601,13 @@ async def websocket_endpoint(websocket: WebSocket):
                 await websocket.send_json({'type': 'pong'})
                 continue
 
-            if key != API_KEY:
-                await websocket.send_text(json.dumps({"type":"error","payload":"missing or invalid api_key"}))
+            # Protected actions - require API key OR allow simple controls without key
+            protected_actions = ["import_config", "reset_simulation", "load_preset"]
+            if action in protected_actions and key != API_KEY:
+                await websocket.send_text(json.dumps({"type":"error","payload":"API key required for this action"}))
                 continue
 
+            # Handle commands
             if action == "add_shift":
                 twin_state["staffing_shifts"] = min(3, twin_state["staffing_shifts"] + 1)
             elif action == "remove_shift":
@@ -508,6 +640,8 @@ async def websocket_endpoint(websocket: WebSocket):
                 async with machines_lock:
                     machines[new_id] = Machine(new_id, name, base_rate, pos)
                     normalize_machine_positions()
+            elif action == "reset_simulation":
+                reset_simulation()
             else:
                 await websocket.send_text(json.dumps({"type":"error","payload":"unknown action"}))
                 continue
@@ -536,7 +670,6 @@ def require_api_key(x_api_key: str = Header(None)):
     if x_api_key != API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API Key")
 
-# IMPORTANT: This route serves your static/index.html at the root URL
 @app.get("/")
 async def index():
     """Serve the main dashboard from static/index.html"""
@@ -555,6 +688,7 @@ async def index():
                     <p><strong>Available endpoints:</strong></p>
                     <ul>
                         <li><a href="/api/machines">GET /api/machines</a> - List all machines</li>
+                        <li><a href="/api/presets">GET /api/presets</a> - List all presets</li>
                         <li><code>ws://localhost:8000/ws</code> - WebSocket connection</li>
                     </ul>
                 </div>
@@ -612,8 +746,6 @@ async def api_import(payload: dict, x_api_key: str = Header(None)):
         twin_state["ambient_temp"] = float(ts.get("ambient_temp", twin_state["ambient_temp"]))
         twin_state["ambient_humidity"] = float(ts.get("ambient_humidity", twin_state["ambient_humidity"]))
     return {"ok": True}
-
-# Additional preset endpoints can be added here...
 
 if __name__ == "__main__":
     import uvicorn
