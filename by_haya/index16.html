@@ -1,0 +1,336 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Factory Floor Digital Twin</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial; margin: 12px; background: #0b0d10; color:#e5e7eb; }
+    header { display:flex; gap:16px; align-items:center; }
+    .card { background:#111418; padding:12px; border-radius:10px; box-shadow:0 6px 20px rgba(0,0,0,0.25); margin-bottom:12px; border:1px solid #1f2937;}
+    .grid { display:grid; grid-template-columns: 1fr 360px; gap:12px; }
+    .machines { display:flex; flex-direction:column; gap:8px; max-height:60vh; overflow:auto; }
+    .machine { display:flex; justify-content:space-between; align-items:center; padding:8px; border-radius:8px; border:1px solid #1f2937; background:#0f1318;}
+    button { padding:8px 10px; border-radius:8px; border: 1px solid #334155; background:#2563eb; color:white; cursor:pointer; }
+    button.secondary { background:#10b981; border-color:#115e59; }
+    footer { margin-top:16px; color:#9ca3af; font-size:13px; }
+    label { font-size:13px; color:#cbd5e1 }
+    input[type="number"], input[type="text"], select {
+      padding:6px; border-radius:6px; border:1px solid #334155; background:#0f1318; color:#e5e7eb;
+    }
+    .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+    .muted { color:#9ca3af; font-size:12px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Factory Floor Digital Twin</h1>
+    <div class="card" style="padding:8px;">
+      <div><strong>Connection:</strong> <span id="conn">disconnected</span></div>
+      <div><strong>Shifts:</strong> <span id="shifts">-</span></div>
+    </div>
+  </header>
+
+  <main class="grid">
+    <section>
+      <div class="card">
+        <h3>Live Metrics</h3>
+        <div><strong>Time:</strong> <span id="time">-</span></div>
+        <div><strong>Total output:</strong> <span id="total_output">0</span></div>
+        <div><strong>Ambient:</strong> <span id="ambient">-</span></div>
+        <div style="margin-top:8px;"><strong>Bottlenecks:</strong> <span id="bottlenecks">none</span></div>
+      </div>
+
+      <div class="card">
+        <h3>Machines</h3>
+        <div class="machines" id="machines"></div>
+      </div>
+
+      <!-- Queue vs Throughput (Split) -->
+      <div class="card">
+        <div class="row" style="justify-content:space-between;">
+          <h3 style="margin:0;">Queue vs. Throughput (Split)</h3>
+          <span class="muted" id="qvt-range"></span>
+        </div>
+        <div class="row" style="margin:8px 0;">
+          <label>Machine</label>
+          <select id="qvt-machine"></select>
+
+          <label>Range</label>
+          <select id="qvt-range-select">
+            <option value="15m">Last 15m</option>
+            <option value="1h" selected>Last 1h</option>
+            <option value="6h">Last 6h</option>
+          </select>
+
+          <label>Bucket</label>
+          <select id="qvt-bucket">
+            <option value="10s">10s</option>
+            <option value="1m" selected>1m</option>
+            <option value="5m">5m</option>
+            <option value="10m">10m</option>
+          </select>
+
+          <button id="qvt-refresh">Refresh</button>
+        </div>
+
+        <!-- Top chart: Queue -->
+        <div style="margin-bottom:10px;">
+          <div class="muted" style="margin:4px 0;">Queue Size (items)</div>
+          <canvas id="qChart" height="160"></canvas>
+        </div>
+
+        <!-- Bottom chart: Throughput -->
+        <div>
+          <div class="muted" style="margin:4px 0;">Throughput (items/min)</div>
+          <canvas id="thChart" height="160"></canvas>
+        </div>
+      </div>
+    </section>
+
+    <aside>
+      <div class="card">
+        <h3>Simulate changes</h3>
+
+        <div style="margin-bottom:8px;">
+          <button id="add_shift">Add shift</button>
+          <button id="remove_shift" class="secondary">Remove shift</button>
+        </div>
+
+        <div style="margin-bottom:8px;">
+          <label>Toggle machine</label><br/>
+          <select id="toggle_select"></select>
+          <button id="toggle_machine">Toggle</button>
+        </div>
+
+        <div style="margin-bottom:8px;">
+          <label>Move equipment (change position)</label><br/>
+          <select id="move_select"></select>
+          <input type="number" id="move_pos" min="1" value="1"/>
+          <button id="move_btn">Move</button>
+        </div>
+
+        <div style="margin-bottom:8px;">
+          <label>Set throughput factor (0.2 - 2.0)</label><br/>
+          <select id="thr_select"></select>
+          <input type="number" id="thr_val" step="0.1" min="0.2" max="2.0" value="1.0"/>
+          <button id="set_thr">Set</button>
+        </div>
+
+        <div style="margin-bottom:8px;">
+          <label>Add new machine</label><br/>
+          <input type="text" id="new_id" placeholder="machine id" value="M_new"/>
+          <input type="number" id="new_rate" placeholder="base rate" value="45"/>
+          <button id="add_machine">Add machine</button>
+        </div>
+
+        <div style="margin-top:12px;">
+          <small>Commands are applied to the live twin and will update the dashboard instantly.</small>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Quick tips</h3>
+        <ol>
+          <li>Open <strong>multiple browser tabs</strong> to simulate multiple users monitoring the twin.</li>
+          <li>Use <strong>Add shift</strong> to simulate more staff — output should rise.</li>
+          <li>Move slow machines earlier to see <em>queue</em> changes and bottlenecks.</li>
+        </ol>
+      </div>
+    </aside>
+  </main>
+
+  <footer>Built as a teaching demo.</footer>
+
+  <!-- Chart libs -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/luxon"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon"></script>
+
+  <!-- Optional: if you have an external API base, set it here -->
+  <script>
+    // Example: window.API_BASE = "https://api.example.com";
+    window.API_BASE = window.API_BASE || "";
+  </script>
+
+  <script>
+    let ws, latestMachines = [];
+    let qChart = null, thChart = null, qvtAutoTimer = null;
+
+    function connect() {
+      const url = `ws://${location.host}/ws`;
+      ws = new WebSocket(url);
+      ws.onopen = () => { document.getElementById('conn').innerText = 'connected'; };
+      ws.onclose = () => { document.getElementById('conn').innerText = 'disconnected'; setTimeout(connect, 1500); };
+      ws.onmessage = (evt) => {
+        const obj = JSON.parse(evt.data);
+        if (obj.type === 'metrics') {
+          renderMetrics(obj.payload);
+          if (latestMachines.length === 0 && obj.payload.machines?.length) {
+            latestMachines = obj.payload.machines.map(m => m.id);
+            populateQvtMachineSelect(latestMachines);
+            document.getElementById('qvt-machine').value = latestMachines[0];
+            refreshQvt();
+            scheduleQvtAutoRefresh();
+          }
+        }
+      };
+    }
+
+    function sendAction(a){ if(!ws || ws.readyState!==1) return alert("Not connected"); ws.send(JSON.stringify(a)); }
+
+    function renderMetrics(p) {
+      document.getElementById('time').innerText = p.time || '-';
+      document.getElementById('total_output').innerText = p.total_output ?? 0;
+      document.getElementById('ambient').innerText = `${p.ambient_temp}°C, ${p.ambient_humidity}%`;
+      document.getElementById('bottlenecks').innerText = p.bottlenecks?.length ? p.bottlenecks.join(', ') : 'none';
+      document.getElementById('shifts').innerText = p.staffing_shifts;
+
+      const machinesDiv = document.getElementById('machines');
+      machinesDiv.innerHTML = '';
+      const toggleSel = document.getElementById('toggle_select');
+      const moveSel = document.getElementById('move_select');
+      const thrSel = document.getElementById('thr_select');
+      [toggleSel, moveSel, thrSel].forEach(s => s.innerHTML = '');
+
+      p.machines.forEach(m => {
+        const el = document.createElement('div');
+        el.className = 'machine';
+        el.innerHTML = `<div><strong>${m.id}</strong><br/>pos:${m.position} • status:${m.status} • processed:${m.total_processed}</div>
+                        <div style="text-align:right"><div>queue: ${m.queue}</div><div>throughput: ${m.throughput_factor}</div></div>`;
+        machinesDiv.appendChild(el);
+        [toggleSel, moveSel, thrSel].forEach(s => { const o = document.createElement('option'); o.value = m.id; o.text = m.id; s.appendChild(o); });
+      });
+
+      const ids = p.machines.map(m => m.id);
+      if (JSON.stringify(ids) !== JSON.stringify(latestMachines)) {
+        latestMachines = ids; populateQvtMachineSelect(ids);
+      }
+    }
+
+    function populateQvtMachineSelect(ids){
+      const sel = document.getElementById('qvt-machine'); const curr = sel.value; sel.innerHTML = '';
+      ids.forEach(id => { const o = document.createElement('option'); o.value = o.text = id; sel.appendChild(o); });
+      if (ids.includes(curr)) sel.value = curr;
+    }
+
+    function computeRange(key){
+      const now = new Date(); let from = new Date(now);
+      if (key==='15m') from = new Date(now.getTime()-15*60*1000);
+      else if (key==='1h') from = new Date(now.getTime()-60*60*1000);
+      else if (key==='6h') from = new Date(now.getTime()-6*60*60*1000);
+      return {from: from.toISOString(), to: now.toISOString()};
+    }
+
+    async function refreshQvt(){
+      const machineId = document.getElementById('qvt-machine').value; if(!machineId) return;
+      const rangeKey = document.getElementById('qvt-range-select').value;
+      const bucket = document.getElementById('qvt-bucket').value;
+      const {from, to} = computeRange(rangeKey);
+
+      const base = (window.API_BASE || "");
+      const url = `${base}/api/machines/${encodeURIComponent(machineId)}/queue-vs-throughput?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&bucket=${encodeURIComponent(bucket)}`;
+
+      const res = await fetch(url);
+      if(!res.ok){ console.warn('QvT API error', res.status, await res.text()); return; }
+      const data = await res.json();
+
+      document.getElementById('qvt-range').textContent =
+        `${new Date(data.from_ || from).toLocaleString()} → ${new Date(data.to || to).toLocaleString()}`;
+
+      const points = Array.isArray(data.points) ? data.points : [];
+      const labels = points.map(p => p.t || p.time || p._time);
+      const q  = points.map(p => (p.queue_size ?? p.queue ?? null));
+      const th = points.map(p => (p.actual_throughput ?? p.throughput ?? null));
+
+      // Top chart: Queue
+      const qCtx = document.getElementById('qChart').getContext('2d');
+      if (!qChart){
+        qChart = new Chart(qCtx, {
+          type: 'line',
+          data: { labels, datasets: [{ label: 'Queue Size', data: q, tension: 0.2, spanGaps: true }] },
+          options: {
+            responsive: true,
+            interaction: { mode: 'index', intersect: false },
+            plugins: { legend: { display: false }, tooltip: { enabled: true } },
+            scales: {
+              x: { type: 'time', time: { tooltipFormat: 'HH:mm', unit: 'minute' }, title: { display: true, text: 'Time' } },
+              y: { type: 'linear', title: { display: true, text: 'Items' }, suggestedMin: 0 }
+            }
+          }
+        });
+      } else {
+        qChart.data.labels = labels; qChart.data.datasets[0].data = q; qChart.update();
+      }
+
+      // Bottom chart: Throughput
+      const thCtx = document.getElementById('thChart').getContext('2d');
+      if (!thChart){
+        thChart = new Chart(thCtx, {
+          type: 'line',
+          data: { labels, datasets: [{ label: 'Throughput', data: th, tension: 0.2, spanGaps: true }] },
+          options: {
+            responsive: true,
+            interaction: { mode: 'index', intersect: false },
+            plugins: { legend: { display: false }, tooltip: { enabled: true } },
+            scales: {
+              x: { type: 'time', time: { tooltipFormat: 'HH:mm', unit: 'minute' }, title: { display: true, text: 'Time' } },
+              y: { type: 'linear', title: { display: true, text: 'items/min' }, suggestedMin: 0 }
+            }
+          }
+        });
+      } else {
+        thChart.data.labels = labels; thChart.data.datasets[0].data = th; thChart.update();
+      }
+
+      // Hover sync (makes both charts highlight same time index)
+      syncHover(qChart, thChart);
+      syncHover(thChart, qChart);
+    }
+
+    function syncHover(srcChart, destChart) {
+      if (!srcChart || !destChart) return;
+      const canvas = srcChart.canvas;
+      canvas.onpointermove = (e) => {
+        const pts = srcChart.getElementsAtEventForMode(e, 'index', { intersect: false }, false);
+        if (pts.length) {
+          const i = pts[0].index;
+          destChart.setActiveElements([{ datasetIndex: 0, index: i }]);
+          destChart.tooltip.setActiveElements([{ datasetIndex: 0, index: i }], {x:0,y:0});
+          destChart.update();
+        } else {
+          destChart.setActiveElements([]);
+          destChart.tooltip.setActiveElements([], {x:0,y:0});
+          destChart.update();
+        }
+      };
+      canvas.onpointerleave = () => {
+        destChart.setActiveElements([]);
+        destChart.tooltip.setActiveElements([], {x:0,y:0});
+        destChart.update();
+      };
+    }
+
+    function scheduleQvtAutoRefresh(){ if(qvtAutoTimer) clearInterval(qvtAutoTimer); qvtAutoTimer = setInterval(refreshQvt, 10000); }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      connect();
+
+      // Action buttons
+      document.getElementById('add_shift').onclick     = () => sendAction({action:'add_shift'});
+      document.getElementById('remove_shift').onclick  = () => sendAction({action:'remove_shift'});
+      document.getElementById('toggle_machine').onclick= () => { const mid = document.getElementById('toggle_select').value; sendAction({action:'toggle_machine', machine_id:mid}); };
+      document.getElementById('move_btn').onclick      = () => { const mid = document.getElementById('move_select').value; const p = parseInt(document.getElementById('move_pos').value||1); sendAction({action:'move_equipment', machine_id:mid, new_position:p}); };
+      document.getElementById('set_thr').onclick       = () => { const mid = document.getElementById('thr_select').value; const v = parseFloat(document.getElementById('thr_val').value||1.0); sendAction({action:'set_throughput', machine_id:mid, value:v}); };
+      document.getElementById('add_machine').onclick   = () => { const id = document.getElementById('new_id').value || `M_new_${Date.now()}`; const rate = parseFloat(document.getElementById('new_rate').value||50); sendAction({action:'add_machine', machine_id:id, base_rate:rate, position:999}); setTimeout(()=>populateQvtMachineSelect(latestMachines), 1000); };
+
+      // QvT controls
+      document.getElementById('qvt-refresh').onclick   = refreshQvt;
+      document.getElementById('qvt-machine').onchange  = refreshQvt;
+      document.getElementById('qvt-range-select').onchange = refreshQvt;
+      document.getElementById('qvt-bucket').onchange   = refreshQvt;
+    });
+  </script>
+</body>
+</html>
