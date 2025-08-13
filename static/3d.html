@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Factory Floor Digital Twin</title>
+  <style>
+    body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,Arial;margin:0;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);min-height:100vh;color:#111827}
+    .wrap{max-width:1200px;margin:24px auto;padding:0 16px}
+    .card{background:rgba(255,255,255,.95);border:1px solid rgba(255,255,255,.2);backdrop-filter:blur(10px);border-radius:16px;box-shadow:0 8px 32px rgba(0,0,0,.1);padding:16px;margin-bottom:16px}
+    header{display:flex;gap:16px;align-items:center;margin-bottom:20px}
+    h1{color:#fff;margin:0;text-shadow:0 2px 4px rgba(0,0,0,.3)}
+    .grid{display:grid;grid-template-columns:1fr 380px;gap:20px}
+    .metrics-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;margin-bottom:16px}
+    .metric-card{background:linear-gradient(135deg,#f8fafc 0%,#e2e8f0 100%);padding:12px;border-radius:8px;border-left:4px solid #3b82f6}
+    .connection-status{padding:4px 12px;border-radius:20px;font-size:12px;font-weight:600}
+    .connected{background:#dcfce7;color:#166534}.disconnected{background:#fee2e2;color:#991b1b}
+    /* صورة الماكينة المختارة */
+    .img-wrap{position:relative;border-radius:16px;overflow:hidden;background:linear-gradient(135deg,#0b1020,#172554);height:360px}
+    #factory-img{width:100%;height:100%;object-fit:cover;display:block}
+    .img-fallback{display:none;align-items:center;justify-content:center;height:100%;color:#cbd5e1;font-size:14px}
+    .badge{position:absolute;top:12px;left:12px;background:#64748b;color:#fff;padding:6px 10px;border-radius:999px;font-size:13px;box-shadow:0 6px 18px rgba(0,0,0,.18)}
+    .badge.on{background:#10b981}.badge.off{background:#ef4444}
+    .img-info{position:absolute;right:12px;bottom:12px;background:rgba(0,0,0,.55);color:#fff;padding:8px 10px;border-radius:12px;font-size:13px;line-height:1.35}
+    .img-controls{margin-top:10px;display:flex;gap:8px;align-items:center}
+    .img-controls select{padding:6px 10px;border-radius:8px;border:1px solid #e5e7eb}
+    /* قائمة الآلات */
+    .machines{display:flex;flex-direction:column;gap:12px;max-height:60vh;overflow:auto}
+    .machine{display:flex;justify-content:space-between;align-items:center;padding:12px;border-radius:10px;border:2px solid #e5e7eb;background:linear-gradient(135deg,#f8fafc 0%,#e2e8f0 100%);transition:.2s}
+    .machine.online{border-color:#10b981;background:linear-gradient(135deg,#f0fdf4 0%,#dcfce7 100%)}
+    .machine.offline{border-color:#ef4444;background:linear-gradient(135deg,#fef2f2 0%,#fee2e2 100%)}
+    /* معرض الصور أسفل الصفحة */
+    .machine-gallery{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px}
+    .mg-card{border:1px solid #e5e7eb;border-radius:14px;overflow:hidden;background:#fff;box-shadow:0 4px 16px rgba(0,0,0,.06)}
+    .mg-thumb{position:relative;height:160px;background:linear-gradient(135deg,#0b1020,#172554)}
+    .mg-thumb img{width:100%;height:100%;object-fit:cover;display:block}
+    .mg-badge{position:absolute;top:10px;left:10px;font-size:12px;padding:6px 10px;border-radius:999px;color:#fff;background:#64748b;box-shadow:0 6px 18px rgba(0,0,0,.18)}
+    .mg-badge.on{background:#10b981}.mg-badge.off{background:#ef4444}
+    .mg-body{padding:10px 12px;display:flex;flex-direction:column;gap:6px;font-size:13px}
+    .mg-title{font-weight:700;font-size:14px}
+    .mg-kv{display:flex;justify-content:space-between;color:#475569}.mg-kv b{color:#111827}
+    /* أزرار */
+    button{padding:10px 16px;border-radius:8px;border:none;background:linear-gradient(135deg,#3b82f6 0%,#1d4ed8 100%);color:#fff;cursor:pointer;font-weight:600}
+    button.secondary{background:linear-gradient(135deg,#10b981 0%,#047857 100%)}
+    button.danger{background:linear-gradient(135deg,#ef4444 0%,#dc2626 100%)}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>🏭 Factory Floor Digital Twin</h1>
+      <div class="card" style="padding:12px">
+        <div><b>Status:</b> <span id="conn" class="connection-status disconnected">Disconnected</span></div>
+        <div><b>Active Shifts:</b> <span id="shifts">-</span></div>
+      </div>
+    </header>
+
+    <main class="grid">
+      <section>
+        <!-- صورة الماكينة المختارة -->
+        <div class="card">
+          <h3>🖼️ Factory View (Static Image)</h3>
+          <div class="img-wrap">
+            <img id="factory-img" src="/static/images/factory.jpg" alt="Factory"/>
+            <div id="img-fallback" class="img-fallback">لم يتم العثور على صورة لهذه الماكينة.</div>
+            <div id="status-badge" class="badge">Unknown</div>
+            <div class="img-info">
+              <div><b id="m-name">—</b></div>
+              <div>Q: <span id="m-queue">—</span> • <span id="m-tp">—</span>%</div>
+            </div>
+          </div>
+          <div class="img-controls">
+            <label for="machineSelect">Machine:</label>
+            <select id="machineSelect"><option value="">Auto (first)</option></select>
+          </div>
+        </div>
+
+        <!-- Live Metrics -->
+        <div class="card">
+          <h3>📊 Live Metrics</h3>
+          <div class="metrics-grid">
+            <div class="metric-card"><div><b>Time:</b></div><div id="time">-</div></div>
+            <div class="metric-card"><div><b>Total Output:</b></div><div id="total_output">0</div></div>
+            <div class="metric-card"><div><b>Temperature:</b></div><div id="temperature">-</div></div>
+            <div class="metric-card"><div><b>Humidity:</b></div><div id="humidity">-</div></div>
+          </div>
+          <div><b>🚨 Bottlenecks:</b> <span id="bottlenecks">None detected</span></div>
+        </div>
+
+        <!-- قائمة الآلات -->
+        <div class="card">
+          <h3>🛠️ Production Machines</h3>
+          <div class="machines" id="machines"><div style="text-align:center;color:#6b7280;padding:20px">Loading...</div></div>
+        </div>
+
+        <!-- 🔽 المعرض أسفل الصفحة -->
+        <section class="card" id="gallery-section">
+          <h3 style="margin-bottom:12px;">🖼️ Machine Gallery</h3>
+          <div id="machine-gallery" class="machine-gallery"></div>
+        </section>
+      </section>
+
+      <aside>
+        <div class="card">
+          <h3>🎛️ Simulation Controls</h3>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button id="add_shift" class="secondary">➕ Add Shift</button>
+            <button id="remove_shift" class="danger">➖ Remove Shift</button>
+          </div>
+          <hr/>
+          <label>🔌 Toggle Power</label>
+          <div style="display:flex;gap:8px;align-items:center">
+            <select id="toggle_select"><option>Select machine...</option></select>
+            <button id="toggle_machine">⚡ Toggle</button>
+          </div>
+          <hr/>
+          <label>📍 Move Equipment</label>
+          <div style="display:flex;gap:8px;align-items:center">
+            <select id="move_select"><option>Select machine...</option></select>
+            <input type="number" id="move_pos" min="1" max="10" value="1" style="padding:6px 10px;border-radius:8px;border:1px solid #e5e7eb"/>
+            <button id="move_btn">🚚 Move</button>
+          </div>
+          <hr/>
+          <label>⚙️ Throughput (0.2–2.0x)</label>
+          <div style="display:flex;gap:8px;align-items:center">
+            <select id="thr_select"><option>Select machine...</option></select>
+            <input type="number" id="thr_val" step="0.1" min="0.2" max="2.0" value="1.0" style="padding:6px 10px;border-radius:8px;border:1px solid #e5e7eb"/>
+            <button id="set_thr">⚙️ Set</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>📖 Quick Guide</h3>
+          <ol style="line-height:1.6;margin:0;padding-inline-start:18px">
+            <li><b>Add shifts</b> لزيادة الإنتاج</li>
+            <li><b>Toggle</b> تشغيل/إيقاف الآلات</li>
+            <li><b>Move</b> ترتيب المعدات في خط الإنتاج</li>
+            <li><b>Throughput</b> صيانة/ترقية</li>
+            <li>أضف صور الآلات في: <code>/static/images/machines/</code></li>
+          </ol>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <script>
+    // ===== إعداد WebSocket =====
+    let ws; let machines_data = [];
+    function connect(){
+      const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      ws = new WebSocket(`${protocol}//${location.host}/ws`);
+      ws.onopen = ()=>{ setConn(true); };
+      ws.onclose= ()=>{ setConn(false); setTimeout(connect, 2000); };
+      ws.onerror= (e)=> console.error('WS error', e);
+      ws.onmessage = (evt)=>{
+        try{
+          const obj = JSON.parse(evt.data);
+          if(obj.type==='metrics') renderMetrics(obj.payload);
+          if(obj.type==='machines_updated'){ machines_data = obj.machines||[]; updateSelectors(); renderGallery(machines_data); }
+        }catch(e){ console.error('parse', e); }
+      };
+    }
+    function setConn(ok){ const el=document.getElementById('conn'); el.textContent = ok?'Connected':'Disconnected'; el.className='connection-status ' + (ok?'connected':'disconnected'); }
+
+    // ===== Alias للصور (جاهز للعمل) =====
+    // لو أسماء ملفاتك مختلفة عن الـID أو اسم الماكينة، اربطها هنا — جاهز بأكثر الحالات شيوعًا
+    const IMAGE_ALIAS = {
+      "M1_cutter": "M1_cutter.jpg",
+      "M2_press": "M2_press.jpg",
+      "M3_paint": "M3_paint.jpg",
+      "M4_inspect": "M4_inspect.jpg",
+      "Cutting Station": "M1_cutter.jpg",
+      "Press Station": "M2_press.jpg",
+      "Paint Station": "M3_paint.jpg",
+      "Inspection Station": "M4_inspect.jpg",
+    };
+    function getImageFile(m){
+      if(IMAGE_ALIAS[m.id]) return IMAGE_ALIAS[m.id];
+      if(IMAGE_ALIAS[m.name]) return IMAGE_ALIAS[m.name];
+      // محاولات تلقائية إن ما لقى alias
+      const byId = `${m.id}.jpg`;
+      return byId;
+    }
+
+    // ===== صورة الماكينة المختارة =====
+    function setBadge(status){
+      const b = document.getElementById('status-badge');
+      b.classList.remove('on','off');
+      if(status==='on'){ b.textContent='Connected'; b.classList.add('on'); }
+      else if(status==='off'){ b.textContent='Offline'; b.classList.add('off'); }
+      else { b.textContent='Unknown'; }
+    }
+    function renderSelected(){
+      const sel=document.getElementById('machineSelect');
+      const mName=document.getElementById('m-name');
+      const mQ=document.getElementById('m-queue');
+      const mTP=document.getElementById('m-tp');
+      const img=document.getElementById('factory-img');
+      const fallback=document.getElementById('img-fallback');
+
+      const id = sel.value;
+      let m = id ? machines_data.find(x=>String(x.id)===String(id)) : machines_data[0];
+
+      if(!m){
+        setBadge(null); mName.textContent='—'; mQ.textContent='—'; mTP.textContent='—';
+        img.src='/static/images/factory.jpg';
+        return;
+      }
+
+      setBadge(m.status);
+      mName.textContent = m.name || m.id;
+      mQ.textContent = (m.queue??0).toFixed ? (m.queue).toFixed(1) : m.queue;
+      mTP.textContent = Math.round((m.throughput_factor??1)*100);
+
+      img.style.display='block'; fallback.style.display='none';
+      img.onerror = function(){
+        img.onerror=null;
+        img.src='/static/images/factory.jpg';
+        img.onerror=function(){ img.style.display='none'; fallback.style.display='flex'; };
+      };
+      img.src = `/static/images/machines/${getImageFile(m)}`;
+    }
+
+    // ===== Live Metrics + قائمة الآلات =====
+    function renderMetrics(p){
+      document.getElementById('time').textContent = new Date(p.time).toLocaleString();
+      document.getElementById('total_output').textContent = p.total_output.toLocaleString();
+      document.getElementById('temperature').textContent = `${p.ambient_temp}°C`;
+      document.getElementById('humidity').textContent = `${p.ambient_humidity}%`;
+      document.getElementById('shifts').textContent = `${p.staffing_shifts} shift${p.staffing_shifts>1?'s':''}`;
+
+      const bott = document.getElementById('bottlenecks');
+      if(p.bottlenecks?.length) bott.innerHTML = p.bottlenecks.map(b=>`<span style="color:#b91c1c;font-weight:700;background:#fee2e2;padding:2px 6px;border-radius:6px;margin-inline:4px;display:inline-block">${b}</span>`).join('');
+      else bott.textContent='None detected';
+
+      machines_data = p.machines || [];
+      renderMachines(machines_data);
+      updateSelectors();
+      renderSelected();
+      renderGallery(machines_data);
+    }
+
+    function renderMachines(list){
+      const root=document.getElementById('machines');
+      if(!list?.length){ root.innerHTML='<div style="text-align:center;color:#6b7280;padding:20px">No machines</div>'; return; }
+      root.innerHTML='';
+      list.forEach(m=>{
+        const el=document.createElement('div');
+        el.className='machine ' + (m.status==='on'?'online':'offline');
+        const statusIcon = m.status==='on'?'🟢':'🔴';
+        const q = Math.round((m.queue||0)*10)/10;
+        el.innerHTML = `
+          <div>
+            <div style="font-weight:700;font-size:16px">${statusIcon} ${m.name||m.id}</div>
+            <div style="font-size:12px;color:#64748b;margin-top:4px">Position: ${m.position||'-'} • Status: ${String(m.status||'').toUpperCase()}</div>
+            <div style="font-size:12px;color:#64748b">Processed: ${m.total_processed?.toLocaleString()||0} items</div>
+          </div>
+          <div style="text-align:right">
+            <div style="font-size:14px;font-weight:600">Queue: ${q}</div>
+            <div style="font-size:12px;color:#64748b">Rate: ${m.base_rate||0}/min</div>
+            <div style="font-size:12px;color:#64748b">Efficiency: ${Math.round((m.throughput_factor||1)*100)}%</div>
+            <div style="font-size:12px;color:#64748b">Uptime: ${Math.round((m.uptime||1)*100)}%</div>
+          </div>`;
+        root.appendChild(el);
+      });
+    }
+
+    function updateSelectors(){
+      const ids=['toggle_select','move_select','thr_select','machineSelect'];
+      ids.forEach(id=>{
+        const s=document.getElementById(id); if(!s) return;
+        const old=s.value;
+        s.innerHTML = id==='machineSelect' ? '<option value="">Auto (first)</option>' : '<option>Select machine...</option>';
+        machines_data.forEach(m=>{
+          const opt=document.createElement('option');
+          opt.value=m.id; opt.textContent = id==='machineSelect' ? (m.name||m.id) : `${m.name||m.id} (Pos: ${m.position||'-'})`;
+          s.appendChild(opt);
+        });
+        if(old && machines_data.some(m=>m.id===old)) s.value=old;
+      });
+    }
+
+    // ===== معرض الصور (أربع بطاقات) =====
+    function machineCardHTML(m){
+      const fileName=getImageFile(m);
+      const imgSrc=`/static/images/machines/${fileName}`;
+      const fallback=`/static/images/factory.jpg`;
+      return `
+        <div class="mg-card">
+          <div class="mg-thumb">
+            <img src="${imgSrc}" onerror="this.onerror=null;this.src='${fallback}'" alt="${m.name||m.id}">
+            <div class="mg-badge ${m.status==='on'?'on':'off'}">${m.status==='on'?'Connected':'Offline'}</div>
+          </div>
+          <div class="mg-body">
+            <div class="mg-title">${m.name||m.id}</div>
+            <div class="mg-kv"><span>ID</span><b>${m.id}</b></div>
+            <div class="mg-kv"><span>Queue</span><b>${Math.round((m.queue||0)*10)/10}</b></div>
+            <div class="mg-kv"><span>Rate</span><b>${m.base_rate||0}/min</b></div>
+            <div class="mg-kv"><span>Efficiency</span><b>${Math.round((m.throughput_factor||1)*100)}%</b></div>
+            <div class="mg-kv"><span>Uptime</span><b>${Math.round((m.uptime||1)*100)}%</b></div>
+            <div class="mg-kv"><span>Position</span><b>${m.position||'-'}</b></div>
+          </div>
+        </div>`;
+    }
+    function renderGallery(list){
+      const wrap=document.getElementById('machine-gallery'); if(!wrap) return;
+      if(!list?.length){ wrap.innerHTML='<div style="color:#6b7280;padding:12px">No machines available</div>'; return; }
+      const sorted=[...list].sort((a,b)=> (a.position||999)-(b.position||999)).slice(0,4);
+      wrap.innerHTML = sorted.map(machineCardHTML).join('');
+    }
+
+    // ===== أوامر التحكم =====
+    function sendAction(obj){
+      if(!ws || ws.readyState!==WebSocket.OPEN){ alert('WebSocket not connected'); return; }
+      ws.send(JSON.stringify(obj));
+    }
+    document.addEventListener('DOMContentLoaded', ()=>{
+      connect();
+      document.getElementById('add_shift').onclick = ()=> sendAction({action:'add_shift'});
+      document.getElementById('remove_shift').onclick = ()=> sendAction({action:'remove_shift'});
+      document.getElementById('toggle_machine').onclick = ()=>{
+        const mid=document.getElementById('toggle_select').value; if(!mid||mid==='Select machine...') return alert('Select machine');
+        sendAction({action:'toggle_machine',machine_id:mid});
+      };
+      document.getElementById('move_btn').onclick = ()=>{
+        const mid=document.getElementById('move_select').value; const pos=parseInt(document.getElementById('move_pos').value||1);
+        if(!mid||mid==='Select machine...') return alert('Select machine');
+        sendAction({action:'move_equipment',machine_id:mid,new_position:pos});
+      };
+      document.getElementById('set_thr').onclick = ()=>{
+        const mid=document.getElementById('thr_select').value; const val=parseFloat(document.getElementById('thr_val').value||1.0);
+        if(!mid||mid==='Select machine...') return alert('Select machine');
+        sendAction({action:'set_throughput',machine_id:mid,value:val});
+      };
+      document.getElementById('machineSelect').addEventListener('change', renderSelected);
+
+      // Fallback تجريبي لو ما فيه WS خلال 2 ثواني
+      setTimeout(()=>{
+        if(machines_data.length===0){
+          machines_data = [
+            {id:'M1_cutter', name:'Cutting Station',   status:'on',  queue:0.7, base_rate:60, throughput_factor:1.0, uptime:1.0, position:1, total_processed:70},
+            {id:'M2_press',  name:'Press Station',     status:'on',  queue:3.2, base_rate:55, throughput_factor:1.0, uptime:0.98, position:2, total_processed:60},
+            {id:'M3_paint',  name:'Paint Station',     status:'on',  queue:10.0,base_rate:50, throughput_factor:1.0, uptime:0.97, position:3, total_processed:52},
+            {id:'M4_inspect',name:'Inspection Station',status:'on',  queue:1.1, base_rate:45, throughput_factor:1.0, uptime:0.99, position:4, total_processed:45},
+          ];
+          setConn(false); // سيناريو بدون WS
+          document.getElementById('shifts').textContent='1 shift';
+          document.getElementById('time').textContent=new Date().toLocaleString();
+          document.getElementById('total_output').textContent='36';
+          document.getElementById('temperature').textContent='24.6°C';
+          document.getElementById('humidity').textContent='45.1%';
+          document.getElementById('bottlenecks').innerHTML='<span style="color:#b91c1c;font-weight:700;background:#fee2e2;padding:2px 6px;border-radius:6px;margin-inline:4px;display:inline-block">M2_press</span><span style="color:#b91c1c;font-weight:700;background:#fee2e2;padding:2px 6px;border-radius:6px;margin-inline:4px;display:inline-block">M3_paint</span>';
+          renderMachines(machines_data);
+          updateSelectors();
+          renderSelected();
+          renderGallery(machines_data);
+        }
+      }, 2000);
+    });
+  </script>
+</body>
+</html>
