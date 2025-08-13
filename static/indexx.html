@@ -1,0 +1,368 @@
+<!-- static/index.html -->
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Factory Floor Digital Twin Dashboard</title>
+  <style>
+    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial; margin: 12px; background: #f4f6f8; }
+    header { display:flex; gap:16px; align-items:center; justify-content: space-between; }
+    .card { background:white; padding:12px; border-radius:10px; box-shadow:0 6px 20px rgba(20,20,40,0.06); margin-bottom:12px; }
+    .grid { display:grid; grid-template-columns: 1fr 360px; gap:12px; }
+    .machines { display:flex; flex-direction:column; gap:8px; max-height:60vh; overflow:auto; }
+    .machine { display:flex; justify-content:space-between; align-items:center; padding:8px; border-radius:8px; border:1px solid #eee; }
+    button { padding:8px 10px; border-radius:8px; border: none; background:#2563eb; color:white; cursor:pointer; }
+    button.secondary { background:#10b981; }
+    footer { margin-top:16px; color:#666; font-size:13px; }
+    label { font-size:13px; color:#333; }
+    input[type="number"], input[type="text"], input[type="password"] { width: 100%; padding:6px; border-radius:6px; border:1px solid #ddd; margin-top:4px; }
+    select { width: 100%; padding:6px; border-radius:6px; border:1px solid #ddd; margin-top:4px; }
+    .bottleneck { color:#b91c1c; font-weight:700; }
+    #login_card, #dashboard { max-width: 600px; margin: auto; }
+    #logout_btn { background:#b91c1c; margin-left: 12px; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Factory Floor Digital Twin</h1>
+    <div id="user_info" class="card" style="padding:8px; display: flex; align-items: center;">
+      <div><strong>Connection:</strong> <span id="conn">disconnected</span></div>
+      <div><strong>Shifts:</strong> <span id="shifts">-</span></div>
+      <div id="role_display" style="margin-left:16px;"></div>
+      <button id="logout_btn" class="hidden">Logout</button>
+    </div>
+  </header>
+
+  <!-- Login Form -->
+  <div id="login_card" class="card">
+    <h3>Login</h3>
+    <div>
+      <label for="username">Username</label>
+      <input type="text" id="username" autocomplete="username" placeholder="Try: admin or viewer" />
+    </div>
+    <div>
+      <label for="password">Password</label>
+      <input type="password" id="password" autocomplete="current-password" placeholder="admin123 or viewer123" />
+    </div>
+    <button id="login_btn">Login</button>
+    <div id="login_error" style="color:red; margin-top:8px;"></div>
+  </div>
+
+  <!-- Dashboard -->
+  <main id="dashboard" class="grid hidden">
+    <section>
+      <div class="card">
+        <h3>Live Metrics</h3>
+        <div><strong>Time:</strong> <span id="time">-</span></div>
+        <div><strong>Total output:</strong> <span id="total_output">0</span></div>
+        <div><strong>Ambient:</strong> <span id="ambient">-</span></div>
+        <div style="margin-top:8px;"><strong>Bottlenecks:</strong> <span id="bottlenecks">none</span></div>
+      </div>
+
+      <div class="card">
+        <h3>Machines</h3>
+        <div class="machines" id="machines"></div>
+      </div>
+    </section>
+
+    <aside>
+      <div class="card" id="control_panel">
+        <h3>Simulate changes</h3>
+
+        <div style="margin-bottom:8px;">
+          <label>Add shift</label><br/>
+          <button id="add_shift">Add shift</button>
+          <button id="remove_shift" class="secondary">Remove shift</button>
+        </div>
+
+        <div style="margin-bottom:8px;">
+          <label>Toggle machine</label><br/>
+          <select id="toggle_select"></select>
+          <button id="toggle_machine">Toggle</button>
+        </div>
+
+        <div style="margin-bottom:8px;">
+          <label>Move equipment (change position)</label><br/>
+          <select id="move_select"></select>
+          <input type="number" id="move_pos" min="1" value="1"/>
+          <button id="move_btn">Move</button>
+        </div>
+
+        <div style="margin-bottom:8px;">
+          <label>Set throughput factor (0.2 - 2.0)</label><br/>
+          <select id="thr_select"></select>
+          <input type="number" id="thr_val" step="0.1" min="0.2" max="2.0" value="1.0"/>
+          <button id="set_thr">Set</button>
+        </div>
+
+        <div style="margin-bottom:8px;">
+          <label>Add new machine</label><br/>
+          <input type="text" id="new_id" placeholder="machine id" value="M_new"/>
+          <input type="number" id="new_rate" placeholder="base rate" value="45"/>
+          <button id="add_machine">Add machine</button>
+        </div>
+
+        <div style="margin-top:12px;">
+          <small>Commands are applied to the live twin and will update the dashboard instantly.</small>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Quick tips</h3>
+        <ol>
+          <li>Open <strong>multiple browser tabs</strong> to simulate multiple users monitoring the twin.</li>
+          <li>Use <strong>Add shift</strong> to simulate more staff — output should rise.</li>
+          <li>Move slow machines earlier to see <em>queue</em> changes and bottlenecks.</li>
+        </ol>
+      </div>
+    </aside>
+  </main>
+
+  <footer>
+    Built as a teaching demo — expand to connect to cloud twins, persist data, or add historical charts.
+  </footer>
+
+<script>
+  let ws;
+  let token = null;
+  let userRole = null;
+
+  const loginCard = document.getElementById('login_card');
+  const dashboard = document.getElementById('dashboard');
+  const controlPanel = document.getElementById('control_panel');
+  const connStatus = document.getElementById('conn');
+  const roleDisplay = document.getElementById('role_display');
+  const logoutBtn = document.getElementById('logout_btn');
+  const loginError = document.getElementById('login_error');
+
+  // Login button click - DEMO MODE (no backend required)
+  document.getElementById('login_btn').onclick = async () => {
+    const username = document.getElementById('username').value.trim();
+    const password = document.getElementById('password').value.trim();
+    loginError.innerText = "";
+
+    if (!username || !password) {
+      loginError.innerText = "Please enter username and password.";
+      return;
+    }
+
+    // Demo credentials
+    const validCredentials = {
+      'admin': 'admin123',
+      'viewer': 'viewer123'
+    };
+
+    if (!validCredentials[username] || validCredentials[username] !== password) {
+      loginError.innerText = "Invalid credentials. Try: admin/admin123 or viewer/viewer123";
+      return;
+    }
+
+    // Simulate successful login
+    token = 'demo_token_' + Date.now();
+    userRole = username; // admin or viewer
+
+    // Update UI based on role
+    loginCard.classList.add('hidden');
+    dashboard.classList.remove('hidden');
+    roleDisplay.innerText = `Role: ${userRole}`;
+    logoutBtn.classList.remove('hidden');
+
+    startDemoSimulation();
+  };
+
+  // Logout button click
+  logoutBtn.onclick = () => {
+    token = null;
+    userRole = null;
+    if(ws) ws.close();
+    loginCard.classList.remove('hidden');
+    dashboard.classList.add('hidden');
+    roleDisplay.innerText = "";
+    logoutBtn.classList.add('hidden');
+    connStatus.innerText = "disconnected";
+  };
+
+  // Demo simulation instead of WebSocket
+  let demoData = {
+    time: new Date().toLocaleTimeString(),
+    total_output: 1250,
+    ambient_temp: 22,
+    ambient_humidity: 45,
+    bottlenecks: [],
+    staffing_shifts: 2,
+    machines: [
+      {id: 'M001', position: 1, status: 'running', total_processed: 120, queue: 5, throughput_factor: 1.0},
+      {id: 'M002', position: 2, status: 'running', total_processed: 98, queue: 12, throughput_factor: 0.8},
+      {id: 'M003', position: 3, status: 'idle', total_processed: 85, queue: 0, throughput_factor: 1.2},
+      {id: 'M004', position: 4, status: 'running', total_processed: 156, queue: 8, throughput_factor: 1.1}
+    ]
+  };
+
+  function startDemoSimulation() {
+    connStatus.innerText = 'connected (demo mode)';
+    
+    // Initial render
+    renderMetrics(demoData);
+    
+    // Update simulation every 3 seconds
+    setInterval(() => {
+      // Update time
+      demoData.time = new Date().toLocaleTimeString();
+      
+      // Randomly update machine data
+      demoData.machines.forEach(m => {
+        if(m.status === 'running') {
+          m.total_processed += Math.floor(Math.random() * 3);
+          m.queue = Math.max(0, m.queue + Math.floor(Math.random() * 3) - 1);
+        }
+      });
+      
+      // Update total output
+      demoData.total_output += Math.floor(Math.random() * 10);
+      
+      // Randomly identify bottlenecks
+      demoData.bottlenecks = demoData.machines
+        .filter(m => m.queue > 10)
+        .map(m => m.id);
+      
+      renderMetrics(demoData);
+    }, 3000);
+  }
+
+  // Legacy connect function for backward compatibility
+  function connect() {
+    // If no token, don't try to connect
+    if (!token) return;
+    connectWebSocket();
+  }
+
+  function sendAction(actionObj) {
+    if(userRole !== 'admin') {
+      alert("You do not have permission to perform this action.");
+      return;
+    }
+    
+    // Demo mode - simulate actions
+    switch(actionObj.action) {
+      case 'add_shift':
+        demoData.staffing_shifts = Math.min(3, demoData.staffing_shifts + 1);
+        alert('Shift added! Total shifts: ' + demoData.staffing_shifts);
+        break;
+      case 'remove_shift':
+        demoData.staffing_shifts = Math.max(1, demoData.staffing_shifts - 1);
+        alert('Shift removed! Total shifts: ' + demoData.staffing_shifts);
+        break;
+      case 'toggle_machine':
+        const machine = demoData.machines.find(m => m.id === actionObj.machine_id);
+        if(machine) {
+          machine.status = machine.status === 'running' ? 'idle' : 'running';
+          alert(`Machine ${machine.id} is now ${machine.status}`);
+        }
+        break;
+      case 'move_equipment':
+        const moveM = demoData.machines.find(m => m.id === actionObj.machine_id);
+        if(moveM) {
+          moveM.position = actionObj.new_position;
+          alert(`Machine ${moveM.id} moved to position ${moveM.position}`);
+        }
+        break;
+      case 'set_throughput':
+        const thrM = demoData.machines.find(m => m.id === actionObj.machine_id);
+        if(thrM) {
+          thrM.throughput_factor = actionObj.value;
+          alert(`Machine ${thrM.id} throughput set to ${thrM.throughput_factor}`);
+        }
+        break;
+      case 'add_machine':
+        const newMachine = {
+          id: actionObj.machine_id,
+          position: actionObj.position || 999,
+          status: 'idle',
+          total_processed: 0,
+          queue: 0,
+          throughput_factor: 1.0
+        };
+        demoData.machines.push(newMachine);
+        alert(`Machine ${newMachine.id} added successfully!`);
+        break;
+    }
+    
+    // Re-render with updated data
+    renderMetrics(demoData);
+  }
+
+  function renderMetrics(payload) {
+    document.getElementById('time').innerText = payload.time;
+    document.getElementById('total_output').innerText = payload.total_output;
+    document.getElementById('ambient').innerText = `${payload.ambient_temp}°C, ${payload.ambient_humidity}%`;
+    document.getElementById('bottlenecks').innerText = payload.bottlenecks.length ? payload.bottlenecks.join(', ') : 'none';
+    document.getElementById('shifts').innerText = payload.staffing_shifts;
+
+    const machinesDiv = document.getElementById('machines');
+    machinesDiv.innerHTML = '';
+    const toggleSel = document.getElementById('toggle_select');
+    const moveSel = document.getElementById('move_select');
+    const thrSel = document.getElementById('thr_select');
+    [toggleSel, moveSel, thrSel].forEach(s => s.innerHTML = '');
+
+    payload.machines.forEach(m => {
+      const el = document.createElement('div');
+      el.className = 'machine';
+      el.innerHTML = `<div>
+                        <strong>${m.id}</strong><br/>
+                        pos:${m.position} • status:${m.status} • processed:${m.total_processed}
+                      </div>
+                      <div style="text-align:right">
+                        <div>queue: ${m.queue}</div>
+                        <div>throughput: ${m.throughput_factor}</div>
+                      </div>`;
+      machinesDiv.appendChild(el);
+
+      // populate selects
+      [toggleSel, moveSel, thrSel].forEach(s => {
+        const o = document.createElement('option');
+        o.value = m.id;
+        o.text = m.id;
+        s.appendChild(o);
+      });
+    });
+
+    // Disable or hide control panel for non-admin
+    if(userRole !== 'admin') {
+      controlPanel.style.pointerEvents = 'none';
+      controlPanel.style.opacity = '0.5';
+    } else {
+      controlPanel.style.pointerEvents = 'auto';
+      controlPanel.style.opacity = '1';
+    }
+  }
+
+  // wire buttons
+  document.addEventListener('DOMContentLoaded', () => {
+    // Buttons actions only work after login and websocket connect
+    document.getElementById('add_shift').onclick = () => sendAction({action:'add_shift'});
+    document.getElementById('remove_shift').onclick = () => sendAction({action:'remove_shift'});
+    document.getElementById('toggle_machine').onclick = () => {
+      const mid = document.getElementById('toggle_select').value;
+      sendAction({action:'toggle_machine', machine_id:mid});
+    };
+    document.getElementById('move_btn').onclick = () => {
+      const mid = document.getElementById('move_select').value;
+      const newpos = parseInt(document.getElementById('move_pos').value||1);
+      sendAction({action:'move_equipment', machine_id:mid, new_position:newpos});
+    };
+    document.getElementById('set_thr').onclick = () => {
+      const mid = document.getElementById('thr_select').value;
+      const val = parseFloat(document.getElementById('thr_val').value||1.0);
+      sendAction({action:'set_throughput', machine_id:mid, value: val});
+    };
+    document.getElementById('add_machine').onclick = () => {
+      const id = document.getElementById('new_id').value || `M_new_${Date.now()}`;
+      const rate = parseFloat(document.getElementById('new_rate').value||50);
+      sendAction({action:'add_machine', machine_id:id, base_rate:rate, position: 999});
+    };
+  });
+</script>
+</body>
+</html>
