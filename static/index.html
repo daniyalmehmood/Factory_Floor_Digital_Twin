@@ -5,187 +5,818 @@
   <meta charset="utf-8" />
   <title>Factory Floor Digital Twin Dashboard</title>
   <style>
-    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial; margin: 12px; background: #f4f6f8; }
-    header { display:flex; gap:16px; align-items:center; }
-    .card { background:white; padding:12px; border-radius:10px; box-shadow:0 6px 20px rgba(20,20,40,0.06); margin-bottom:12px; }
-    .grid { display:grid; grid-template-columns: 1fr 360px; gap:12px; }
-    .machines { display:flex; flex-direction:column; gap:8px; max-height:60vh; overflow:auto; }
-    .machine { display:flex; justify-content:space-between; align-items:center; padding:8px; border-radius:8px; border:1px solid #eee; }
-    button { padding:8px 10px; border-radius:8px; border: none; background:#2563eb; color:white; cursor:pointer; }
-    button.secondary { background:#10b981; }
-    footer { margin-top:16px; color:#666; font-size:13px; }
-    label { font-size:13px; color:#333 }
-    input[type="number"] { width:80px; padding:6px; border-radius:6px; border:1px solid #ddd; }
-    .bottleneck { color:#b91c1c; font-weight:700; }
+    body { 
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial; 
+      margin: 12px; 
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+    }
+    header { 
+      display:flex; 
+      gap:16px; 
+      align-items:center; 
+      margin-bottom: 20px;
+    }
+    h1 {
+      color: white;
+      text-shadow: 0 2px 4px rgba(0,0,0,0.3);
+      margin: 0;
+    }
+    .card { 
+      background: rgba(255,255,255,0.95); 
+      padding: 16px; 
+      border-radius: 12px; 
+      box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(255,255,255,0.2);
+      margin-bottom: 16px; 
+    }
+    .grid { 
+      display: grid; 
+      grid-template-columns: 1fr 400px; 
+      gap: 20px; 
+    }
+    .machines { 
+      display: flex; 
+      flex-direction: column; 
+      gap: 12px; 
+      max-height: 65vh; 
+      overflow: auto; 
+    }
+    .machine { 
+      display: flex; 
+      justify-content: space-between; 
+      align-items: center; 
+      padding: 12px; 
+      border-radius: 10px; 
+      border: 2px solid #e5e7eb;
+      background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
+      transition: all 0.3s ease;
+    }
+    .machine:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 16px rgba(0,0,0,0.1);
+    }
+    .machine.offline {
+      border-color: #ef4444;
+      background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%);
+    }
+    .machine.online {
+      border-color: #10b981;
+      background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
+    }
+    button { 
+      padding: 10px 16px; 
+      border-radius: 8px; 
+      border: none; 
+      background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+      color: white; 
+      cursor: pointer; 
+      font-weight: 500;
+      transition: all 0.3s ease;
+    }
+    button:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
+    }
+    button.secondary { 
+      background: linear-gradient(135deg, #10b981 0%, #047857 100%);
+    }
+    button.secondary:hover {
+      box-shadow: 0 4px 12px rgba(16, 185, 129, 0.4);
+    }
+    button.danger {
+      background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+    }
+    button.danger:hover {
+      box-shadow: 0 4px 12px rgba(239, 68, 68, 0.4);
+    }
+    footer { 
+      margin-top: 20px; 
+      color: rgba(255,255,255,0.8); 
+      font-size: 13px; 
+      text-align: center;
+    }
+    label { 
+      font-size: 14px; 
+      color: #374151;
+      font-weight: 500;
+      display: block;
+      margin-bottom: 4px;
+    }
+    input[type="number"], input[type="text"], select { 
+      padding: 8px 12px; 
+      border-radius: 6px; 
+      border: 2px solid #d1d5db; 
+      margin-right: 8px;
+      margin-bottom: 8px;
+      transition: border-color 0.3s ease;
+    }
+    input:focus, select:focus {
+      outline: none;
+      border-color: #3b82f6;
+      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+    }
+    .bottleneck { 
+      color: #dc2626; 
+      font-weight: 700; 
+      background: #fef2f2;
+      padding: 4px 8px;
+      border-radius: 6px;
+      display: inline-block;
+    }
+    .status-indicator {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      display: inline-block;
+      margin-right: 8px;
+    }
+    .status-online { background: #10b981; }
+    .status-offline { background: #ef4444; }
+    .connection-status {
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 500;
+    }
+    .connected {
+      background: #dcfce7;
+      color: #166534;
+    }
+    .disconnected {
+      background: #fee2e2;
+      color: #991b1b;
+    }
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+    .metric-card {
+      background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
+      padding: 12px;
+      border-radius: 8px;
+      border-left: 4px solid #3b82f6;
+    }
+    .control-section {
+      margin-bottom: 20px;
+      padding: 16px;
+      background: #f8fafc;
+      border-radius: 8px;
+      border-left: 4px solid #10b981;
+    }
+    .api-section {
+      margin-top: 16px;
+      padding: 12px;
+      background: #fef3c7;
+      border-radius: 8px;
+      border-left: 4px solid #f59e0b;
+    }
+    
+    /* Tooltip Styles */
+    .tooltip {
+      position: relative;
+      display: inline-block;
+      cursor: help;
+    }
+    
+    .tooltip .tooltiptext {
+      visibility: hidden;
+      width: 300px;
+      background-color: #1f2937;
+      color: #fff;
+      text-align: left;
+      border-radius: 8px;
+      padding: 12px;
+      position: absolute;
+      z-index: 1000;
+      bottom: 125%;
+      left: 50%;
+      margin-left: -150px;
+      opacity: 0;
+      transition: opacity 0.3s, visibility 0.3s;
+      font-size: 12px;
+      line-height: 1.4;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+    }
+    
+    .tooltip .tooltiptext::after {
+      content: "";
+      position: absolute;
+      top: 100%;
+      left: 50%;
+      margin-left: -8px;
+      border-width: 8px;
+      border-style: solid;
+      border-color: #1f2937 transparent transparent transparent;
+    }
+    
+    .tooltip:hover .tooltiptext {
+      visibility: visible;
+      opacity: 1;
+    }
+    
+    /* Tooltip variations for different positions */
+    .tooltip-right .tooltiptext {
+      top: -5px;
+      left: 125%;
+      margin-left: 0;
+      bottom: auto;
+      width: 250px;
+    }
+    
+    .tooltip-right .tooltiptext::after {
+      top: 50%;
+      left: 0%;
+      margin-left: -8px;
+      margin-top: -8px;
+      border-color: transparent #1f2937 transparent transparent;
+    }
+    
+    .tooltip-top .tooltiptext {
+      top: -5px;
+      bottom: auto;
+      width: 280px;
+    }
+    
+    .tooltip-code {
+      background: #0f172a;
+      font-family: 'Courier New', monospace;
+      white-space: pre-wrap;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+    
+    .tooltip-code::scrollbar {
+      width: 4px;
+    }
+    
+    .tooltip-code::scrollbar-track {
+      background: #374151;
+    }
+    
+    .tooltip-code::scrollbar-thumb {
+      background: #6b7280;
+      border-radius: 2px;
+    }
+    
+    .help-icon {
+      display: inline-block;
+      width: 16px;
+      height: 16px;
+      background: #3b82f6;
+      color: white;
+      border-radius: 50%;
+      text-align: center;
+      font-size: 10px;
+      line-height: 16px;
+      margin-left: 6px;
+      cursor: help;
+    }
   </style>
 </head>
 <body>
   <header>
-    <h1>Factory Floor Digital Twin</h1>
-    <div class="card" style="padding:8px;">
-      <div><strong>Connection:</strong> <span id="conn">disconnected</span></div>
-      <div><strong>Shifts:</strong> <span id="shifts">-</span></div>
+    <h1>🏭 Factory Floor Digital Twin</h1>
+    <div class="card" style="padding:12px;">
+      <div><strong>Status:</strong> <span id="conn" class="connection-status disconnected">Disconnected</span></div>
+      <div><strong>Active Shifts:</strong> <span id="shifts">-</span></div>
     </div>
   </header>
 
   <main class="grid">
     <section>
       <div class="card">
-        <h3>Live Metrics</h3>
-        <div><strong>Time:</strong> <span id="time">-</span></div>
-        <div><strong>Total output:</strong> <span id="total_output">0</span></div>
-        <div><strong>Ambient:</strong> <span id="ambient">-</span></div>
-        <div style="margin-top:8px;"><strong>Bottlenecks:</strong> <span id="bottlenecks">none</span></div>
+        <h3>📊 Live Metrics
+          <div class="tooltip">
+            <span class="help-icon">?</span>
+            <span class="tooltiptext">
+              <strong>Real-time Production Metrics:</strong><br/>
+              • Time: Current simulation timestamp<br/>
+              • Total Output: Finished products count<br/>
+              • Temperature/Humidity: Environmental factors affecting efficiency<br/>
+              • Bottlenecks: Machines with high queue buildup<br/>
+              <br/>
+              Updates every 2 seconds via WebSocket connection
+            </span>
+          </div>
+        </h3>
+        <div class="metrics-grid">
+          <div class="metric-card">
+            <div><strong>Time:</strong></div>
+            <div id="time">-</div>
+          </div>
+          <div class="metric-card">
+            <div><strong>Total Output:</strong></div>
+            <div id="total_output">0</div>
+          </div>
+          <div class="metric-card">
+            <div><strong>Temperature:</strong></div>
+            <div id="temperature">-</div>
+          </div>
+          <div class="metric-card">
+            <div><strong>Humidity:</strong></div>
+            <div id="humidity">-</div>
+          </div>
+        </div>
+        <div style="margin-top:16px;">
+          <strong>🚨 Bottlenecks:</strong> 
+          <span id="bottlenecks">None detected</span>
+        </div>
       </div>
 
       <div class="card">
-        <h3>Machines</h3>
-        <div class="machines" id="machines"></div>
+        <h3>🔧 Production Machines
+          <div class="tooltip">
+            <span class="help-icon">?</span>
+            <span class="tooltiptext">
+              <strong>Machine Status Display:</strong><br/>
+              • 🟢 Online / 🔴 Offline status indicator<br/>
+              • Queue: Items waiting to be processed<br/>
+              • Rate: Base processing capacity (items/minute)<br/>
+              • Efficiency: Current throughput multiplier<br/>
+              • Uptime: Operational availability percentage<br/>
+              <br/>
+              <strong>Queue Status:</strong><br/>
+              • ✅ Normal (&lt;5 items)<br/>
+              • ⚡ Moderate (5-10 items)<br/>
+              • ⚠️ High (&gt;10 items - bottleneck!)
+            </span>
+          </div>
+        </h3>
+        <div class="machines" id="machines">
+          <div style="text-align: center; padding: 20px; color: #6b7280;">
+            Loading machines...
+          </div>
+        </div>
+      </div>
+
+      <div class="card api-section">
+        <h3>🔗 REST API Integration
+          <div class="tooltip tooltip-right">
+            <span class="help-icon">?</span>
+            <span class="tooltiptext">
+              <strong>REST API Endpoints:</strong><br/>
+              • GET /api/machines - List all machines<br/>
+              • POST /api/machines - Create new machine<br/>
+              • PUT /api/machines/{id} - Update machine<br/>
+              • DELETE /api/machines/{id} - Delete machine<br/>
+              <br/>
+              <strong>Example POST request:</strong><br/>
+              <div class="tooltip-code">POST /api/machines
+Content-Type: application/json
+
+{
+  "name": "Quality Control",
+  "base_rate": 55.0,
+  "position": 3
+}</div>
+            </span>
+          </div>
+        </h3>
+        <div style="margin-bottom: 12px;">
+          <button id="fetch_machines">🔄 Fetch Machines (GET)</button>
+          <button id="refresh_dashboard" class="secondary">📊 Refresh Dashboard</button>
+        </div>
+        <div id="api_response" style="background: white; padding: 8px; border-radius: 4px; font-family: monospace; font-size: 12px; max-height: 150px; overflow: auto;"></div>
       </div>
     </section>
 
     <aside>
       <div class="card">
-        <h3>Simulate changes</h3>
+        <h3>🎛️ Simulation Controls</h3>
 
-        <div style="margin-bottom:8px;">
-          <label>Add shift</label><br/>
-          <button id="add_shift">Add shift</button>
-          <button id="remove_shift" class="secondary">Remove shift</button>
+        <div class="control-section">
+          <label>👥 Staffing Management 
+            <div class="tooltip">
+              <span class="help-icon">?</span>
+              <span class="tooltiptext">
+                <strong>Staffing Control:</strong><br/>
+                • Add Shift: Increases workforce multiplier by 0.25x<br/>
+                • Remove Shift: Decreases workforce (min 1 shift)<br/>
+                • More shifts = higher throughput across all machines<br/>
+                <br/>
+                <strong>WebSocket Commands:</strong><br/>
+                <div class="tooltip-code">{"action": "add_shift"}
+{"action": "remove_shift"}</div>
+              </span>
+            </div>
+          </label>
+          <button id="add_shift" class="secondary">➕ Add Shift</button>
+          <button id="remove_shift" class="danger">➖ Remove Shift</button>
         </div>
 
-        <div style="margin-bottom:8px;">
-          <label>Toggle machine</label><br/>
-          <select id="toggle_select"></select>
-          <button id="toggle_machine">Toggle</button>
+        <div class="control-section">
+          <label>🔌 Machine Power Control
+            <div class="tooltip">
+              <span class="help-icon">?</span>
+              <span class="tooltiptext">
+                <strong>Toggle Machine Power:</strong><br/>
+                • ON → OFF: Machine stops processing, uptime decreases<br/>
+                • OFF → ON: Machine resumes normal operation<br/>
+                • Affects production flow and bottlenecks<br/>
+                <br/>
+                <strong>WebSocket Command:</strong><br/>
+                <div class="tooltip-code">{"action": "toggle_machine", 
+ "machine_id": "M1_cutter"}</div>
+              </span>
+            </div>
+          </label>
+          <select id="toggle_select">
+            <option>Select machine...</option>
+          </select>
+          <button id="toggle_machine">⚡ Toggle Power</button>
         </div>
 
-        <div style="margin-bottom:8px;">
-          <label>Move equipment (change position)</label><br/>
-          <select id="move_select"></select>
-          <input type="number" id="move_pos" min="1" value="1"/>
-          <button id="move_btn">Move</button>
+        <div class="control-section">
+          <label>📍 Equipment Positioning
+            <div class="tooltip">
+              <span class="help-icon">?</span>
+              <span class="tooltiptext">
+                <strong>Move Equipment in Production Line:</strong><br/>
+                • Changes machine's position in the pipeline<br/>
+                • Lower numbers = earlier in production flow<br/>
+                • Moving slow machines earlier can reduce bottlenecks<br/>
+                • Positions auto-normalize to avoid conflicts<br/>
+                <br/>
+                <strong>WebSocket Command:</strong><br/>
+                <div class="tooltip-code">{"action": "move_equipment",
+ "machine_id": "M2_press",
+ "new_position": 1}</div>
+              </span>
+            </div>
+          </label>
+          <select id="move_select">
+            <option>Select machine...</option>
+          </select>
+          <input type="number" id="move_pos" min="1" max="10" value="1" placeholder="Position"/>
+          <button id="move_btn">🚚 Move Equipment</button>
         </div>
 
-        <div style="margin-bottom:8px;">
-          <label>Set throughput factor (0.2 - 2.0)</label><br/>
-          <select id="thr_select"></select>
-          <input type="number" id="thr_val" step="0.1" min="0.2" max="2.0" value="1.0"/>
-          <button id="set_thr">Set</button>
+        <div class="control-section">
+          <label>⚙️ Throughput Adjustment (0.2 - 2.0x)
+            <div class="tooltip">
+              <span class="help-icon">?</span>
+              <span class="tooltiptext">
+                <strong>Adjust Machine Efficiency:</strong><br/>
+                • 1.0 = Normal efficiency (100%)<br/>
+                • &lt; 1.0 = Reduced (maintenance, wear)<br/>
+                • &gt; 1.0 = Enhanced (upgrades, optimization)<br/>
+                • Directly multiplies machine's base processing rate<br/>
+                <br/>
+                <strong>WebSocket Command:</strong><br/>
+                <div class="tooltip-code">{"action": "set_throughput",
+ "machine_id": "M3_paint",
+ "value": 1.5}</div>
+              </span>
+            </div>
+          </label>
+          <select id="thr_select">
+            <option>Select machine...</option>
+          </select>
+          <input type="number" id="thr_val" step="0.1" min="0.2" max="2.0" value="1.0" placeholder="Factor"/>
+          <button id="set_thr">⚙️ Set Throughput</button>
         </div>
 
-        <div style="margin-bottom:8px;">
-          <label>Add new machine</label><br/>
-          <input type="text" id="new_id" placeholder="machine id" value="M_new"/>
-          <input type="number" id="new_rate" placeholder="base rate" value="45"/>
-          <button id="add_machine">Add machine</button>
+        <div class="control-section">
+          <label>➕ Add New Machine
+            <div class="tooltip">
+              <span class="help-icon">?</span>
+              <span class="tooltiptext">
+                <strong>Create New Production Machine:</strong><br/>
+                • Name: Display name for the machine<br/>
+                • Rate: Items processed per minute (base capacity)<br/>
+                • Position: Where in production line (auto-sorted)<br/>
+                • New machines start with 100% efficiency<br/>
+                <br/>
+                <strong>WebSocket Command:</strong><br/>
+                <div class="tooltip-code">{"action": "add_machine",
+ "machine_id": "M_new_1234",
+ "name": "Assembly Station",
+ "base_rate": 60,
+ "position": 2}</div>
+              </span>
+            </div>
+          </label>
+          <input type="text" id="new_name" placeholder="Machine name" value="New Station"/>
+          <input type="number" id="new_rate" placeholder="Items/min" value="45" min="1" max="200"/>
+          <input type="number" id="new_position" placeholder="Position" value="1" min="1"/>
+          <button id="add_machine">🏭 Add Machine</button>
         </div>
 
-        <div style="margin-top:12px;">
-          <small>Commands are applied to the live twin and will update the dashboard instantly.</small>
+        <div class="control-section">
+          <label>🗑️ Machine Management
+            <div class="tooltip">
+              <span class="help-icon">?</span>
+              <span class="tooltiptext">
+                <strong>Delete Production Machine:</strong><br/>
+                • Permanently removes machine from production line<br/>
+                • Clears machine's processing queue<br/>
+                • Other machines' positions auto-adjust<br/>
+                • ⚠️ Action cannot be undone!<br/>
+                <br/>
+                <strong>REST API Call:</strong><br/>
+                <div class="tooltip-code">DELETE /api/machines/{machine_id}
+
+Response:
+{"status": "deleted", 
+ "id": "M2_press"}</div>
+              </span>
+            </div>
+          </label>
+          <select id="delete_select">
+            <option>Select machine to delete...</option>
+          </select>
+          <button id="delete_machine" class="danger">🗑️ Delete Machine</button>
+        </div>
+
+        <div style="margin-top:16px; padding: 12px; background: #eff6ff; border-radius: 8px;">
+          <small><strong>💡 Pro Tips:</strong> Commands update the live simulation instantly. Open multiple tabs to simulate multiple operators monitoring the system.</small>
         </div>
       </div>
 
       <div class="card">
-        <h3>Quick tips</h3>
-        <ol>
-          <li>Open <strong>multiple browser tabs</strong> to simulate multiple users monitoring the twin.</li>
-          <li>Use <strong>Add shift</strong> to simulate more staff — output should rise.</li>
-          <li>Move slow machines earlier to see <em>queue</em> changes and bottlenecks.</li>
+        <h3>📖 Quick Guide</h3>
+        <ol style="line-height: 1.6;">
+          <li><strong>👥 Add shifts</strong> to simulate more staff — watch output increase</li>
+          <li><strong>🔌 Toggle machines</strong> on/off to see impact on production flow</li>
+          <li><strong>📍 Move slow machines</strong> earlier in the line to reduce bottlenecks</li>
+          <li><strong>⚙️ Adjust throughput</strong> to simulate maintenance or upgrades</li>
+          <li><strong>🏭 Add/remove machines</strong> to reconfigure your production line</li>
         </ol>
       </div>
     </aside>
   </main>
 
   <footer>
-    Built as a teaching demo — expand to connect to cloud twins, persist data, or add historical charts.
+    🚀 Built as a comprehensive factory digital twin demo — expand with cloud connectivity, historical data, and advanced analytics
   </footer>
 
 <script>
   let ws;
+  let machines_data = [];
+
   function connect() {
-    ws = new WebSocket(`ws://${location.host}/ws`);
+    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    ws = new WebSocket(`${protocol}//${location.host}/ws`);
+    
     ws.onopen = () => {
-      document.getElementById('conn').innerText = 'connected';
+      document.getElementById('conn').innerText = 'Connected';
+      document.getElementById('conn').className = 'connection-status connected';
+      console.log('WebSocket connected');
     };
+    
     ws.onclose = () => {
-      document.getElementById('conn').innerText = 'disconnected';
-      setTimeout(connect, 1500);
+      document.getElementById('conn').innerText = 'Disconnected';
+      document.getElementById('conn').className = 'connection-status disconnected';
+      console.log('WebSocket disconnected, attempting to reconnect...');
+      setTimeout(connect, 2000);
     };
+    
+    ws.onerror = (error) => {
+      console.error('WebSocket error:', error);
+    };
+    
     ws.onmessage = (evt) => {
-      const obj = JSON.parse(evt.data);
-      if (obj.type === 'metrics') {
-        renderMetrics(obj.payload);
+      try {
+        const obj = JSON.parse(evt.data);
+        console.log('Received message:', obj);
+        
+        if (obj.type === 'metrics') {
+          renderMetrics(obj.payload);
+        } else if (obj.type === 'machines_updated') {
+          // Handle REST API machine updates
+          machines_data = obj.machines || [];
+          updateMachineSelectors();
+        } else if (obj.type === 'error') {
+          console.error('Server error:', obj.payload);
+          alert(`Server error: ${obj.payload}`);
+        }
+      } catch (e) {
+        console.error('Error parsing message:', e, evt.data);
       }
     };
   }
 
   function sendAction(actionObj) {
-    if (!ws || ws.readyState !== 1) return alert("Not connected yet");
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      alert("WebSocket not connected. Please wait for connection.");
+      return;
+    }
+    console.log('Sending action:', actionObj);
     ws.send(JSON.stringify(actionObj));
   }
 
   function renderMetrics(payload) {
-    document.getElementById('time').innerText = payload.time;
-    document.getElementById('total_output').innerText = payload.total_output;
-    document.getElementById('ambient').innerText = `${payload.ambient_temp}°C, ${payload.ambient_humidity}%`;
-    document.getElementById('bottlenecks').innerText = payload.bottlenecks.length ? payload.bottlenecks.join(', ') : 'none';
-    document.getElementById('shifts').innerText = payload.staffing_shifts;
+    document.getElementById('time').innerText = new Date(payload.time).toLocaleString();
+    document.getElementById('total_output').innerText = payload.total_output.toLocaleString();
+    document.getElementById('temperature').innerText = `${payload.ambient_temp}°C`;
+    document.getElementById('humidity').innerText = `${payload.ambient_humidity}%`;
+    
+    const bottlenecksEl = document.getElementById('bottlenecks');
+    if (payload.bottlenecks && payload.bottlenecks.length > 0) {
+      bottlenecksEl.innerHTML = payload.bottlenecks.map(b => 
+        `<span class="bottleneck">${b}</span>`
+      ).join(' ');
+    } else {
+      bottlenecksEl.innerText = 'None detected';
+    }
+    
+    document.getElementById('shifts').innerText = `${payload.staffing_shifts} shift${payload.staffing_shifts > 1 ? 's' : ''}`;
 
+    // Store machines data and render
+    machines_data = payload.machines || [];
+    renderMachines(machines_data);
+    updateMachineSelectors();
+  }
+
+  function renderMachines(machines) {
     const machinesDiv = document.getElementById('machines');
+    
+    if (!machines || machines.length === 0) {
+      machinesDiv.innerHTML = '<div style="text-align: center; padding: 20px; color: #6b7280;">No machines available</div>';
+      return;
+    }
+
     machinesDiv.innerHTML = '';
-    const toggleSel = document.getElementById('toggle_select');
-    const moveSel = document.getElementById('move_select');
-    const thrSel = document.getElementById('thr_select');
-    [toggleSel, moveSel, thrSel].forEach(s => s.innerHTML = '');
-
-    payload.machines.forEach(m => {
+    
+    machines.forEach(m => {
       const el = document.createElement('div');
-      el.className = 'machine';
-      el.innerHTML = `<div>
-                        <strong>${m.id}</strong><br/>
-                        pos:${m.position} • status:${m.status} • processed:${m.total_processed}
-                      </div>
-                      <div style="text-align:right">
-                        <div>queue: ${m.queue}</div>
-                        <div>throughput: ${m.throughput_factor}</div>
-                      </div>`;
+      el.className = `machine ${m.status === 'on' ? 'online' : 'offline'}`;
+      
+      const statusIcon = m.status === 'on' ? '🟢' : '🔴';
+      const queueStatus = m.queue > 10 ? '⚠️' : m.queue > 5 ? '⚡' : '✅';
+      
+      el.innerHTML = `
+        <div>
+          <div style="font-weight: bold; font-size: 16px;">
+            ${statusIcon} ${m.name || m.id}
+          </div>
+          <div style="font-size: 12px; color: #6b7280; margin-top: 4px;">
+            Position: ${m.position} • Status: ${m.status.toUpperCase()}
+          </div>
+          <div style="font-size: 12px; color: #6b7280;">
+            Processed: ${m.total_processed?.toLocaleString() || 0} items
+          </div>
+        </div>
+        <div style="text-align: right;">
+          <div style="font-size: 14px; font-weight: 500;">
+            ${queueStatus} Queue: ${Math.round(m.queue * 10) / 10}
+          </div>
+          <div style="font-size: 12px; color: #6b7280;">
+            Rate: ${m.base_rate}/min
+          </div>
+          <div style="font-size: 12px; color: #6b7280;">
+            Efficiency: ${Math.round(m.throughput_factor * 100)}%
+          </div>
+          <div style="font-size: 12px; color: #6b7280;">
+            Uptime: ${Math.round(m.uptime * 100)}%
+          </div>
+        </div>
+      `;
       machinesDiv.appendChild(el);
-
-      // populate selects
-      [toggleSel, moveSel, thrSel].forEach(s => {
-        const o = document.createElement('option');
-        o.value = m.id;
-        o.text = m.id;
-        s.appendChild(o);
-      });
     });
   }
 
-  // wire buttons
+  function updateMachineSelectors() {
+    const selectors = ['toggle_select', 'move_select', 'thr_select', 'delete_select'];
+    
+    selectors.forEach(selectorId => {
+      const select = document.getElementById(selectorId);
+      const currentValue = select.value;
+      select.innerHTML = '<option>Select machine...</option>';
+      
+      machines_data.forEach(m => {
+        const option = document.createElement('option');
+        option.value = m.id;
+        option.text = `${m.name || m.id} (Pos: ${m.position})`;
+        select.appendChild(option);
+      });
+      
+      // Restore selection if still valid
+      if (currentValue && machines_data.some(m => m.id === currentValue)) {
+        select.value = currentValue;
+      }
+    });
+  }
+
+  // REST API functions
+  async function fetchMachines() {
+    try {
+      const response = await fetch('/api/machines');
+      const data = await response.json();
+      document.getElementById('api_response').innerText = JSON.stringify(data, null, 2);
+      console.log('Fetched machines:', data);
+    } catch (error) {
+      document.getElementById('api_response').innerText = `Error: ${error.message}`;
+      console.error('Error fetching machines:', error);
+    }
+  }
+
+  async function createMachine(name, baseRate, position) {
+    try {
+      const response = await fetch('/api/machines', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          name: name,
+          base_rate: baseRate,
+          position: position
+        })
+      });
+      const data = await response.json();
+      document.getElementById('api_response').innerText = `Created: ${JSON.stringify(data, null, 2)}`;
+      console.log('Created machine:', data);
+    } catch (error) {
+      document.getElementById('api_response').innerText = `Error: ${error.message}`;
+      console.error('Error creating machine:', error);
+    }
+  }
+
+  async function deleteMachine(machineId) {
+    try {
+      const response = await fetch(`/api/machines/${machineId}`, {
+        method: 'DELETE'
+      });
+      const data = await response.json();
+      document.getElementById('api_response').innerText = `Deleted: ${JSON.stringify(data, null, 2)}`;
+      console.log('Deleted machine:', data);
+    } catch (error) {
+      document.getElementById('api_response').innerText = `Error: ${error.message}`;
+      console.error('Error deleting machine:', error);
+    }
+  }
+
+  // Event listeners
   document.addEventListener('DOMContentLoaded', () => {
     connect();
 
+    // WebSocket controls
     document.getElementById('add_shift').onclick = () => sendAction({action:'add_shift'});
     document.getElementById('remove_shift').onclick = () => sendAction({action:'remove_shift'});
+    
     document.getElementById('toggle_machine').onclick = () => {
       const mid = document.getElementById('toggle_select').value;
+      if (!mid || mid === 'Select machine...') {
+        alert('Please select a machine first');
+        return;
+      }
       sendAction({action:'toggle_machine', machine_id:mid});
     };
+    
     document.getElementById('move_btn').onclick = () => {
       const mid = document.getElementById('move_select').value;
-      const newpos = parseInt(document.getElementById('move_pos').value||1);
+      const newpos = parseInt(document.getElementById('move_pos').value || 1);
+      if (!mid || mid === 'Select machine...') {
+        alert('Please select a machine first');
+        return;
+      }
       sendAction({action:'move_equipment', machine_id:mid, new_position:newpos});
     };
+    
     document.getElementById('set_thr').onclick = () => {
       const mid = document.getElementById('thr_select').value;
-      const val = parseFloat(document.getElementById('thr_val').value||1.0);
+      const val = parseFloat(document.getElementById('thr_val').value || 1.0);
+      if (!mid || mid === 'Select machine...') {
+        alert('Please select a machine first');
+        return;
+      }
       sendAction({action:'set_throughput', machine_id:mid, value: val});
     };
+    
     document.getElementById('add_machine').onclick = () => {
-      const id = document.getElementById('new_id').value || `M_new_${Date.now()}`;
-      const rate = parseFloat(document.getElementById('new_rate').value||50);
-      sendAction({action:'add_machine', machine_id:id, base_rate:rate, position: 999});
+      const name = document.getElementById('new_name').value || `Machine_${Date.now()}`;
+      const rate = parseFloat(document.getElementById('new_rate').value || 50);
+      const position = parseInt(document.getElementById('new_position').value || 1);
+      
+      // Use WebSocket for adding machine (matches backend WebSocket handler)
+      sendAction({
+        action:'add_machine', 
+        machine_id: `M_${Date.now()}`,
+        name: name,
+        base_rate: rate, 
+        position: position
+      });
+    };
+
+    // REST API controls
+    document.getElementById('fetch_machines').onclick = fetchMachines;
+    document.getElementById('refresh_dashboard').onclick = () => location.reload();
+    
+    document.getElementById('delete_machine').onclick = async () => {
+      const mid = document.getElementById('delete_select').value;
+      if (!mid || mid === 'Select machine...') {
+        alert('Please select a machine to delete');
+        return;
+      }
+      
+      if (confirm(`Are you sure you want to delete machine ${mid}?`)) {
+        await deleteMachine(mid);
+      }
     };
   });
 </script>
