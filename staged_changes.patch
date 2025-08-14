@@ -1,0 +1,1943 @@
+diff --git a/.idea/workspace.xml b/.idea/workspace.xml
+new file mode 100644
+index 0000000..9c417af
+--- /dev/null
++++ b/.idea/workspace.xml
+@@ -0,0 +1,48 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<project version="4">
++  <component name="AutoImportSettings">
++    <option name="autoReloadType" value="SELECTIVE" />
++  </component>
++  <component name="ChangeListManager">
++    <list default="true" id="81907578-5ff8-4877-9043-3e6225a0bb49" name="Changes" comment="">
++      <change afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
++      <change beforePath="$PROJECT_DIR$/backend.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend.py" afterDir="false" />
++      <change beforePath="$PROJECT_DIR$/requirements.txt" beforeDir="false" afterPath="$PROJECT_DIR$/requirements.txt" afterDir="false" />
++      <change beforePath="$PROJECT_DIR$/static/index.html" beforeDir="false" afterPath="$PROJECT_DIR$/static/index.html" afterDir="false" />
++      <change beforePath="$PROJECT_DIR$/twin_history.db" beforeDir="false" afterPath="$PROJECT_DIR$/twin_history.db" afterDir="false" />
++    </list>
++    <option name="SHOW_DIALOG" value="false" />
++    <option name="HIGHLIGHT_CONFLICTS" value="true" />
++    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
++    <option name="LAST_RESOLUTION" value="IGNORE" />
++  </component>
++  <component name="Git.Settings">
++    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
++  </component>
++  <component name="MarkdownSettingsMigration">
++    <option name="stateVersion" value="1" />
++  </component>
++  <component name="ProjectId" id="31Dxr1Ta7ojCODCa3ZwXerPC1Ut" />
++  <component name="ProjectViewState">
++    <option name="hideEmptyMiddlePackages" value="true" />
++    <option name="showLibraryContents" value="true" />
++  </component>
++  <component name="PropertiesComponent">{
++  &quot;keyToString&quot;: {
++    &quot;RunOnceActivity.OpenProjectViewOnStart&quot;: &quot;true&quot;,
++    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
++    &quot;last_opened_file_path&quot;: &quot;C:/Users/MuhammadDaniyal/Downloads/hackathon/Factory_Floor_Digital_Twin&quot;
++  }
++}</component>
++  <component name="SpellCheckerSettings" RuntimeDictionaries="0" Folders="0" CustomDictionaries="0" DefaultDictionary="application-level" UseSingleDictionary="true" transferred="true" />
++  <component name="TaskManager">
++    <task active="true" id="Default" summary="Default task">
++      <changelist id="81907578-5ff8-4877-9043-3e6225a0bb49" name="Changes" comment="" />
++      <created>1755072639904</created>
++      <option name="number" value="Default" />
++      <option name="presentableId" value="Default" />
++      <updated>1755072639904</updated>
++    </task>
++    <servers />
++  </component>
++</project>
+\ No newline at end of file
+diff --git a/__pycache__/backend.cpython-311.pyc b/__pycache__/backend.cpython-311.pyc
+new file mode 100644
+index 0000000..9d9a1bf
+Binary files /dev/null and b/__pycache__/backend.cpython-311.pyc differ
+diff --git a/backend.py b/backend.py
+index c18bdc4..322a868 100644
+--- a/backend.py
++++ b/backend.py
+@@ -3,6 +3,7 @@ import asyncio
+ import json
+ import math
+ import random
++<<<<<<< Updated upstream
+ from datetime import datetime
+ from typing import Dict, List
+ 
+@@ -11,10 +12,361 @@ from fastapi.responses import HTMLResponse
+ from fastapi.staticfiles import StaticFiles
+ from fastapi import Request
+ from fastapi.templating import Jinja2Templates
++=======
++import sqlite3
++import uuid
++from datetime import datetime, timedelta
++from typing import Dict, List, Any, Optional
++import threading
++import time
++import os
++import re
++import secrets
++
++from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException, Header, Depends, status, Query
++from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
++from fastapi.staticfiles import StaticFiles
++from fastapi.middleware.cors import CORSMiddleware
++from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
++from pydantic import BaseModel
++import jwt
++from passlib.context import CryptContext
++
++import paho.mqtt.client as mqtt  # for optional external ingestion
++
++# -------------------
++# CONFIG
++# -------------------
++DB_PATH = "twin_history.db"
++API_KEY = os.environ.get("FACTORY_API_KEY", "secret123")
++MQTT_ENABLED = False
++MQTT_BROKER = os.environ.get("MQTT_BROKER", "broker.hivemq.com")
++MQTT_PORT = int(os.environ.get("MQTT_PORT", 1883))
++MQTT_TOPIC = os.environ.get("MQTT_TOPIC", "/factory/digitaltwin/sensors")
++TICK_SECONDS = 2.0
++SECONDS_PER_MIN = 60.0
++>>>>>>> Stashed changes
++
++# JWT Configuration
++JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY", secrets.token_urlsafe(32))
++JWT_ALGORITHM = "HS256"
++JWT_EXPIRATION_HOURS = 24
+ 
+ app = FastAPI()
+ app.mount("/static", StaticFiles(directory="static"), name="static")
++<<<<<<< Updated upstream
+ templates = Jinja2Templates(directory="static")
++=======
++
++# Password hashing
++pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
++
++# HTTP Bearer for token authentication
++security = HTTPBearer(auto_error=False)
++
++# -----------------------
++# PYDANTIC MODELS
++# -----------------------
++class MachineIn(BaseModel):
++    name: str
++    base_rate: float = 50.0
++    position: int = 1
++
++class PresetIn(BaseModel):
++    name: str
++    description: str = ""
++
++class UserCreate(BaseModel):
++    username: str
++    password: str
++    role: str = "viewer"  # Default to viewer role
++
++class UserLogin(BaseModel):
++    username: str
++    password: str
++
++class Token(BaseModel):
++    access_token: str
++    token_type: str
++    user: dict
++
++# -------------------
++# AUTHENTICATION HELPERS
++# -------------------
++def verify_password(plain_password: str, hashed_password: str) -> bool:
++    """Verify a password against its hash"""
++    return pwd_context.verify(plain_password, hashed_password)
++
++def get_password_hash(password: str) -> str:
++    """Hash a password"""
++    return pwd_context.hash(password)
++
++def create_access_token(data: dict) -> str:
++    """Create a JWT access token"""
++    to_encode = data.copy()
++    expire = datetime.utcnow() + timedelta(hours=JWT_EXPIRATION_HOURS)
++    to_encode.update({"exp": expire})
++    encoded_jwt = jwt.encode(to_encode, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
++    return encoded_jwt
++
++def verify_token(token: str) -> Optional[dict]:
++    """Verify and decode a JWT token"""
++    try:
++        payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
++        return payload
++    except jwt.PyJWTError:
++        return None
++
++def get_user_by_username(username: str) -> Optional[dict]:
++    """Get user by username from database"""
++    with db_lock:
++        cur = db_conn.cursor()
++        cur.execute("SELECT id, username, password_hash, role, created_at, last_login FROM users WHERE username = ?", (username,))
++        row = cur.fetchone()
++        if row:
++            return {
++                "id": row[0],
++                "username": row[1],
++                "password_hash": row[2],
++                "role": row[3],
++                "created_at": row[4],
++                "last_login": row[5]
++            }
++    return None
++
++def get_user_by_id(user_id: int) -> Optional[dict]:
++    """Get user by ID from database"""
++    with db_lock:
++        cur = db_conn.cursor()
++        cur.execute("SELECT id, username, password_hash, role, created_at, last_login FROM users WHERE id = ?", (user_id,))
++        row = cur.fetchone()
++        if row:
++            return {
++                "id": row[0],
++                "username": row[1],
++                "password_hash": row[2],
++                "role": row[3],
++                "created_at": row[4],
++                "last_login": row[5]
++            }
++    return None
++
++def update_last_login(user_id: int):
++    """Update user's last login timestamp"""
++    with db_lock:
++        cur = db_conn.cursor()
++        now = datetime.utcnow().isoformat() + "Z"
++        cur.execute("UPDATE users SET last_login = ? WHERE id = ?", (now, user_id))
++        db_conn.commit()
++
++async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
++    """Get current authenticated user"""
++    if not credentials:
++        raise HTTPException(
++            status_code=status.HTTP_401_UNAUTHORIZED,
++            detail="Authentication required",
++            headers={"WWW-Authenticate": "Bearer"},
++        )
++        
++    token = credentials.credentials
++    payload = verify_token(token)
++    
++    if payload is None:
++        raise HTTPException(
++            status_code=status.HTTP_401_UNAUTHORIZED,
++            detail="Invalid authentication credentials",
++            headers={"WWW-Authenticate": "Bearer"},
++        )
++    
++    user_id = payload.get("sub")
++    if user_id is None:
++        raise HTTPException(
++            status_code=status.HTTP_401_UNAUTHORIZED,
++            detail="Invalid authentication credentials",
++            headers={"WWW-Authenticate": "Bearer"},
++        )
++    
++    user = get_user_by_id(int(user_id))
++    if user is None:
++        raise HTTPException(
++            status_code=status.HTTP_401_UNAUTHORIZED,
++            detail="User not found",
++            headers={"WWW-Authenticate": "Bearer"},
++        )
++    
++    return user
++
++def require_admin(current_user: dict = Depends(get_current_user)) -> dict:
++    """Require admin role"""
++    if current_user["role"] != "admin":
++        raise HTTPException(
++            status_code=status.HTTP_403_FORBIDDEN,
++            detail="Admin access required"
++        )
++    return current_user
++
++# -------------------
++# DATABASE (SQLite)
++# -------------------
++def get_db_version(conn):
++    try:
++        cursor = conn.cursor()
++        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'")
++        if cursor.fetchone():
++            cursor.execute("SELECT version FROM schema_version ORDER BY id DESC LIMIT 1")
++            result = cursor.fetchone()
++            return result[0] if result else 0
++        return 0
++    except:
++        return 0
++
++def set_db_version(conn, version):
++    cursor = conn.cursor()
++    cursor.execute("""
++    CREATE TABLE IF NOT EXISTS schema_version (
++        id INTEGER PRIMARY KEY AUTOINCREMENT,
++        version INTEGER NOT NULL,
++        updated_at TEXT NOT NULL
++    )
++    """)
++    cursor.execute("INSERT INTO schema_version (version, updated_at) VALUES (?, ?)", 
++                  (version, datetime.utcnow().isoformat() + "Z"))
++    conn.commit()
++
++def check_column_exists(conn, table_name, column_name):
++    cursor = conn.cursor()
++    cursor.execute(f"PRAGMA table_info({table_name})")
++    columns = [row[1] for row in cursor.fetchall()]
++    return column_name in columns
++
++def migrate_database(conn):
++    current_version = get_db_version(conn)
++    cursor = conn.cursor()
++    
++    if current_version < 1:
++        print("Migrating database to version 1...")
++        try:
++            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='presets'")
++            if cursor.fetchone():
++                if not check_column_exists(conn, 'presets', 'description'):
++                    cursor.execute("ALTER TABLE presets ADD COLUMN description TEXT")
++                    print("Added 'description' column to presets table")
++                
++                if not check_column_exists(conn, 'presets', 'created_at'):
++                    cursor.execute("ALTER TABLE presets ADD COLUMN created_at TEXT")
++                    print("Added 'created_at' column to presets table")
++                    
++                    default_date = datetime.utcnow().isoformat() + "Z"
++                    cursor.execute("UPDATE presets SET created_at = ? WHERE created_at IS NULL", (default_date,))
++                    print("Set default created_at for existing presets")
++            
++            conn.commit()
++            set_db_version(conn, 1)
++            print("Database migration to version 1 completed")
++        except Exception as e:
++            print(f"Migration to version 1 failed: {e}")
++            conn.rollback()
++
++    # Migration to version 2: Add users table
++    if current_version < 2:
++        print("Migrating database to version 2...")
++        try:
++            cursor.execute("""
++            CREATE TABLE IF NOT EXISTS users (
++                id INTEGER PRIMARY KEY AUTOINCREMENT,
++                username TEXT NOT NULL UNIQUE,
++                password_hash TEXT NOT NULL,
++                role TEXT NOT NULL DEFAULT 'viewer',
++                created_at TEXT NOT NULL,
++                last_login TEXT
++            );
++            """)
++            
++            # Create default admin user if no users exist
++            cursor.execute("SELECT COUNT(*) FROM users")
++            user_count = cursor.fetchone()[0]
++            
++            if user_count == 0:
++                admin_password_hash = get_password_hash("admin123")  # Default admin password
++                created_at = datetime.utcnow().isoformat() + "Z"
++                cursor.execute("""
++                INSERT INTO users (username, password_hash, role, created_at) 
++                VALUES (?, ?, ?, ?)
++                """, ("admin", admin_password_hash, "admin", created_at))
++                print("Created default admin user (username: admin, password: admin123)")
++            
++            conn.commit()
++            set_db_version(conn, 2)
++            print("Database migration to version 2 completed")
++        except Exception as e:
++            print(f"Migration to version 2 failed: {e}")
++            conn.rollback()
++
++def init_db():
++    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
++    c = conn.cursor()
++    
++    c.execute("""
++    CREATE TABLE IF NOT EXISTS metrics (
++        id INTEGER PRIMARY KEY AUTOINCREMENT,
++        ts TEXT NOT NULL,
++        payload TEXT NOT NULL
++    );
++    """)
++    
++    c.execute("""
++    CREATE TABLE IF NOT EXISTS presets (
++        id INTEGER PRIMARY KEY AUTOINCREMENT,
++        name TEXT NOT NULL UNIQUE,
++        description TEXT,
++        config TEXT NOT NULL,
++        created_at TEXT NOT NULL
++    );
++    """)
++    
++    # Create users table
++    c.execute("""
++    CREATE TABLE IF NOT EXISTS users (
++        id INTEGER PRIMARY KEY AUTOINCREMENT,
++        username TEXT NOT NULL UNIQUE,
++        password_hash TEXT NOT NULL,
++        role TEXT NOT NULL DEFAULT 'viewer',
++        created_at TEXT NOT NULL,
++        last_login TEXT
++    );
++    """)
++    
++    conn.commit()
++    migrate_database(conn)
++    return conn
++
++db_conn = init_db()
++db_lock = threading.Lock()
++
++def save_metrics_snapshot(snapshot: dict):
++    try:
++        with db_lock:
++            cur = db_conn.cursor()
++            cur.execute("INSERT INTO metrics (ts, payload) VALUES (?, ?)", (snapshot["time"], json.dumps(snapshot)))
++            db_conn.commit()
++    except Exception as e:
++        print("DB save error:", e)
++
++def query_history(minutes: int = 60):
++    cutoff = datetime.utcnow() - timedelta(minutes=minutes)
++    cutoff_iso = cutoff.isoformat() + "Z"
++    with db_lock:
++        cur = db_conn.cursor()
++        cur.execute("SELECT ts, payload FROM metrics WHERE ts >= ? ORDER BY ts ASC", (cutoff_iso,))
++        rows = cur.fetchall()
++    results = []
++    for ts, payload in rows:
++        try:
++            results.append(json.loads(payload))
++        except:
++            pass
++    return results
++>>>>>>> Stashed changes
+ 
+ # -----------------------
+ # DIGITAL TWIN MODEL
+@@ -148,23 +500,35 @@ def process_production_tick(delta_seconds: float):
+ # -----------------------
+ class ConnectionManager:
+     def __init__(self):
+-        self.active: List[WebSocket] = []
++        self.active: List[Dict[str, any]] = []
+ 
+-    async def connect(self, websocket: WebSocket):
++    async def connect(self, websocket: WebSocket, user: Optional[dict] = None):
+         await websocket.accept()
+-        self.active.append(websocket)
++        connection_info = {
++            "websocket": websocket,
++            "user": user,
++            "connected_at": datetime.utcnow()
++        }
++        self.active.append(connection_info)
+ 
+     def disconnect(self, websocket: WebSocket):
+-        if websocket in self.active:
+-            self.active.remove(websocket)
++        self.active = [conn for conn in self.active if conn["websocket"] != websocket]
+ 
+     async def broadcast(self, message: Dict):
+         data = json.dumps(message)
+         living = []
+-        for ws in list(self.active):
++        for conn_info in list(self.active):
+             try:
++<<<<<<< Updated upstream
+                 await ws.send_text(data)
+                 living.append(ws)
++=======
++                if isinstance(data, str):
++                    await conn_info["websocket"].send_text(data)
++                else:
++                    await conn_info["websocket"].send_json(data)
++                living.append(conn_info)
++>>>>>>> Stashed changes
+             except Exception:
+                 # drop broken websockets
+                 pass
+@@ -172,7 +536,95 @@ class ConnectionManager:
+ 
+ manager = ConnectionManager()
+ 
++# -------------------
++# AUTHENTICATION ENDPOINTS
++# -------------------
++@app.post("/api/register")
++async def register(user_data: UserCreate):
++    """Register a new user"""
++    # Validate username
++    if not user_data.username or len(user_data.username.strip()) < 3:
++        raise HTTPException(status_code=400, detail="Username must be at least 3 characters long")
++    
++    if not re.match(r'^[a-zA-Z0-9_-]+$', user_data.username):
++        raise HTTPException(status_code=400, detail="Username can only contain letters, numbers, hyphens, and underscores")
++    
++    # Validate password
++    if len(user_data.password) < 6:
++        raise HTTPException(status_code=400, detail="Password must be at least 6 characters long")
++    
++    # Validate role
++    if user_data.role not in ["admin", "viewer"]:
++        raise HTTPException(status_code=400, detail="Role must be either 'admin' or 'viewer'")
++    
++    # Check if user already exists
++    existing_user = get_user_by_username(user_data.username)
++    if existing_user:
++        raise HTTPException(status_code=400, detail="Username already registered")
++    
++    # Hash password and create user
++    try:
++        password_hash = get_password_hash(user_data.password)
++        created_at = datetime.utcnow().isoformat() + "Z"
++        
++        with db_lock:
++            cur = db_conn.cursor()
++            cur.execute("""
++            INSERT INTO users (username, password_hash, role, created_at) 
++            VALUES (?, ?, ?, ?)
++            """, (user_data.username, password_hash, user_data.role, created_at))
++            db_conn.commit()
++            user_id = cur.lastrowid
++        
++        return {"message": "User registered successfully", "user_id": user_id}
++    except Exception as e:
++        print(f"Registration error: {e}")
++        raise HTTPException(status_code=500, detail="Failed to register user")
++
++@app.post("/api/token")
++async def login(user_credentials: UserLogin):
++    """Authenticate user and return JWT token"""
++    user = get_user_by_username(user_credentials.username)
++    
++    if not user or not verify_password(user_credentials.password, user["password_hash"]):
++        raise HTTPException(
++            status_code=status.HTTP_401_UNAUTHORIZED,
++            detail="Incorrect username or password",
++            headers={"WWW-Authenticate": "Bearer"},
++        )
++    
++    # Update last login
++    update_last_login(user["id"])
++    
++    # Create access token
++    access_token = create_access_token(data={"sub": str(user["id"])})
++    
++    # Return token and user info
++    user_info = {
++        "id": user["id"],
++        "username": user["username"],
++        "role": user["role"]
++    }
++    
++    return {
++        "access_token": access_token,
++        "token_type": "bearer",
++        "user": user_info
++    }
++
++@app.get("/api/me")
++async def get_me(current_user: dict = Depends(get_current_user)):
++    """Get current user information"""
++    return {
++        "id": current_user["id"],
++        "username": current_user["username"],
++        "role": current_user["role"],
++        "created_at": current_user["created_at"],
++        "last_login": current_user["last_login"]
++    }
++
+ # -----------------------
++<<<<<<< Updated upstream
+ # BACKGROUND TASK: simulator broadcaster
+ # -----------------------
+ async def simulator_loop():
+@@ -184,6 +636,142 @@ async def simulator_loop():
+         # find bottlenecks (high queue)
+         bottlenecks = [m["id"] for m in machines_snapshot if m["queue"] > max(2.0, 0.5 * (m["base_rate"]/SECONDS_PER_MIN) * TICK_SECONDS)]
+         metrics = {
++=======
++# REST API ENDPOINTS (now with authentication)
++# -----------------------
++@app.get('/api/machines')
++async def list_machines(current_user: dict = Depends(get_current_user)):
++    return machines_snapshot()
++
++@app.post('/api/machines', status_code=201)
++async def create_machine(payload: MachineIn, current_user: dict = Depends(require_admin)):
++    async with machines_lock:
++        mid = str(uuid.uuid4())
++        m = Machine(mid, payload.name, payload.base_rate, payload.position)
++        machines[mid] = m
++    
++    normalize_machine_positions()
++    await manager.broadcast({'type': 'machines_updated', 'machines': machines_snapshot()})
++    return m.to_dict()
++
++@app.put('/api/machines/{machine_id}')
++async def update_machine(machine_id: str, payload: MachineIn, current_user: dict = Depends(require_admin)):
++    async with machines_lock:
++        if machine_id not in machines:
++            raise HTTPException(status_code=404, detail='Machine not found')
++        
++        m = machines[machine_id]
++        m.name = payload.name
++        m.base_rate = payload.base_rate
++        m.position = payload.position
++        m.last_change = datetime.utcnow().isoformat() + "Z"
++    
++    normalize_machine_positions()
++    await manager.broadcast({'type': 'machines_updated', 'machines': machines_snapshot()})
++    return m.to_dict()
++
++@app.delete('/api/machines/{machine_id}')
++async def delete_machine(machine_id: str, current_user: dict = Depends(require_admin)):
++    async with machines_lock:
++        if machine_id not in machines:
++            raise HTTPException(status_code=404, detail='Machine not found')
++
++        m = machines.pop(machine_id)
++        m.queue = 0.0
++
++    normalize_machine_positions()
++    await manager.broadcast({'type': 'machines_updated', 'machines': machines_snapshot()})
++    return {'status': 'deleted', 'id': machine_id}
++
++# -----------------------
++# PRESET ENDPOINTS (now with authentication)
++# -----------------------
++@app.get('/api/presets')
++async def list_presets(current_user: dict = Depends(get_current_user)):
++    with db_lock:
++        cur = db_conn.cursor()
++        cur.execute("SELECT id, name, description, created_at FROM presets ORDER BY created_at DESC")
++        rows = cur.fetchall()
++    
++    presets = []
++    for row in rows:
++        presets.append({
++            "id": row[0],
++            "name": row[1],
++            "description": row[2] or "",
++            "created_at": row[3]
++        })
++    return presets
++
++@app.post('/api/presets', status_code=201)
++async def create_preset(payload: PresetIn, current_user: dict = Depends(require_admin)):
++    try:
++        name = validate_preset_name(payload.name)
++    except ValueError as e:
++        raise HTTPException(status_code=400, detail=str(e))
++    
++    config = {
++        "twin_state": twin_state,
++        "machines": machines_snapshot()
++    }
++    
++    try:
++        with db_lock:
++            cur = db_conn.cursor()
++            cur.execute(
++                "INSERT INTO presets (name, description, config, created_at) VALUES (?, ?, ?, ?)",
++                (name, payload.description, json.dumps(config), datetime.utcnow().isoformat() + "Z")
++            )
++            db_conn.commit()
++            preset_id = cur.lastrowid
++    except sqlite3.IntegrityError:
++        raise HTTPException(status_code=400, detail="Preset name already exists")
++    
++    return {
++        "id": preset_id,
++        "name": name,
++        "description": payload.description,
++        "created_at": datetime.utcnow().isoformat() + "Z"
++    }
++
++@app.post('/api/presets/{preset_id}/load')
++async def load_preset(preset_id: int, current_user: dict = Depends(require_admin)):
++    with db_lock:
++        cur = db_conn.cursor()
++        cur.execute("SELECT name, config FROM presets WHERE id = ?", (preset_id,))
++        row = cur.fetchone()
++    
++    if not row:
++        raise HTTPException(status_code=404, detail="Preset not found")
++    
++    try:
++        config = json.loads(row[1])
++        
++        # Load machines
++        if "machines" in config:
++            machines.clear()
++            for m_data in config["machines"]:
++                machine = Machine(
++                    m_data["id"],
++                    m_data.get("name", m_data["id"]),
++                    float(m_data.get("base_rate", 50)),
++                    int(m_data.get("position", 1))
++                )
++                machine.from_dict(m_data)
++                machines[machine.id] = machine
++            
++            normalize_machine_positions()
++        
++        # Load twin state
++        if "twin_state" in config:
++            ts = config["twin_state"]
++            twin_state["staffing_shifts"] = int(ts.get("staffing_shifts", 1))
++            twin_state["ambient_temp"] = float(ts.get("ambient_temp", 25.0))
++            twin_state["ambient_humidity"] = float(ts.get("ambient_humidity", 45.0))
++        
++        # Broadcast update
++        current_payload = {
++>>>>>>> Stashed changes
+             "time": twin_state["time"],
+             "ambient_temp": twin_state["ambient_temp"],
+             "ambient_humidity": twin_state["ambient_humidity"],
+@@ -192,8 +780,56 @@ async def simulator_loop():
+             "bottlenecks": bottlenecks,
+             "staffing_shifts": twin_state["staffing_shifts"],
+         }
++<<<<<<< Updated upstream
+         # broadcast to all dashboards
+         await manager.broadcast({"type": "metrics", "payload": metrics})
++=======
++        await manager.broadcast({"type": "metrics", "payload": current_payload})
++        
++        return {"message": f"Loaded preset: {row[0]}"}
++        
++    except Exception as e:
++        raise HTTPException(status_code=500, detail=f"Error loading preset: {str(e)}")
++
++@app.delete('/api/presets/{preset_id}')
++async def delete_preset(preset_id: int, current_user: dict = Depends(require_admin)):
++    with db_lock:
++        cur = db_conn.cursor()
++        cur.execute("DELETE FROM presets WHERE id = ?", (preset_id,))
++        if cur.rowcount == 0:
++            raise HTTPException(status_code=404, detail="Preset not found")
++        db_conn.commit()
++    
++    return {"message": "Preset deleted"}
++
++# -----------------------
++# BACKGROUND TASK
++# -----------------------
++async def simulator_loop():
++    while True:
++        try:
++            if machines:
++                process_production_tick(TICK_SECONDS)
++                
++                machines_snapshot_data = machines_snapshot()
++                bottlenecks = [m["id"] for m in machines_snapshot_data if m["queue"] > max(2.0, 0.5 * (m["base_rate"]/SECONDS_PER_MIN) * TICK_SECONDS)]
++                
++                metrics = {
++                    "time": twin_state["time"],
++                    "ambient_temp": twin_state["ambient_temp"],
++                    "ambient_humidity": twin_state["ambient_humidity"],
++                    "total_output": twin_state["total_output"],
++                    "machines": machines_snapshot_data,
++                    "bottlenecks": bottlenecks,
++                    "staffing_shifts": twin_state["staffing_shifts"],
++                }
++                
++                await manager.broadcast({"type": "metrics", "payload": metrics})
++                save_metrics_snapshot(metrics)
++        except Exception as e:
++            print(f"Simulator loop error: {e}")
++        
++>>>>>>> Stashed changes
+         await asyncio.sleep(TICK_SECONDS)
+ 
+ @app.on_event("startup")
+@@ -203,11 +839,24 @@ async def startup_event():
+     loop.create_task(simulator_loop())
+ 
+ # -----------------------
++<<<<<<< Updated upstream
+ # WS endpoint for dashboard clients (receive commands, send metrics)
++=======
++# WEBSOCKET ENDPOINT - Enhanced with authentication
++>>>>>>> Stashed changes
+ # -----------------------
+ @app.websocket("/ws")
+-async def websocket_endpoint(websocket: WebSocket):
+-    await manager.connect(websocket)
++async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(None)):
++    # Try to authenticate user if token is provided
++    user = None
++    if token:
++        payload = verify_token(token)
++        if payload:
++            user_id = payload.get("sub")
++            if user_id:
++                user = get_user_by_id(int(user_id))
++    
++    await manager.connect(websocket, user)
+     try:
+         # on connect, send immediate snapshot
+         await websocket.send_text(json.dumps({"type": "metrics", "payload": {
+@@ -218,7 +867,32 @@ async def websocket_endpoint(websocket: WebSocket):
+             "machines": [m.to_dict() for m in sorted(machines, key=lambda x: x.position)],
+             "bottlenecks": [],
+             "staffing_shifts": twin_state["staffing_shifts"],
++<<<<<<< Updated upstream
+         }}))
++=======
++        }
++        await websocket.send_text(json.dumps({"type": "metrics", "payload": initial_payload}))
++        
++        # Send authentication status
++        if user:
++            await websocket.send_text(json.dumps({
++                "type": "auth_status", 
++                "payload": {
++                    "authenticated": True,
++                    "user": {
++                        "id": user["id"],
++                        "username": user["username"],
++                        "role": user["role"]
++                    }
++                }
++            }))
++        else:
++            await websocket.send_text(json.dumps({
++                "type": "auth_status", 
++                "payload": {"authenticated": False}
++            }))
++        
++>>>>>>> Stashed changes
+         while True:
+             msg = await websocket.receive_text()
+             try:
+@@ -229,6 +903,37 @@ async def websocket_endpoint(websocket: WebSocket):
+ 
+             # Handle commands: add_shift, remove_shift, move_equipment, toggle_machine, set_throughput
+             action = obj.get("action")
++<<<<<<< Updated upstream
++=======
++            
++            # Unprotected actions
++            if action == "get_snapshot":
++                snapshot = {
++                    "time": twin_state["time"],
++                    "ambient_temp": twin_state["ambient_temp"],
++                    "ambient_humidity": twin_state["ambient_humidity"],
++                    "total_output": twin_state["total_output"],
++                    "machines": machines_snapshot(),
++                    "bottlenecks": [m_id for m_id, m in machines.items() if m.queue > 5],
++                    "staffing_shifts": twin_state["staffing_shifts"],
++                }
++                await websocket.send_text(json.dumps({"type":"metrics","payload": snapshot}))
++                continue
++            elif action == "ping":
++                await websocket.send_json({'type': 'pong'})
++                continue
++
++            # All other commands require authentication and admin role
++            if not user:
++                await websocket.send_text(json.dumps({"type":"error","payload":"authentication required"}))
++                continue
++            
++            if user["role"] != "admin":
++                await websocket.send_text(json.dumps({"type":"error","payload":"admin access required"}))
++                continue
++
++            # Handle admin commands
++>>>>>>> Stashed changes
+             if action == "add_shift":
+                 twin_state["staffing_shifts"] = min(3, twin_state["staffing_shifts"] + 1)
+             elif action == "remove_shift":
+@@ -287,3 +992,75 @@ async def websocket_endpoint(websocket: WebSocket):
+         manager.disconnect(websocket)
+     except Exception:
+         manager.disconnect(websocket)
++<<<<<<< Updated upstream
++=======
++
++# -------------------
++# HTTP ENDPOINTS (now with authentication where needed)
++# -------------------
++@app.get("/")
++async def index():
++    """Serve the main dashboard"""
++    return FileResponse("index.html")
++
++@app.get("/api/history")
++async def api_history(minutes: int = 60, current_user: dict = Depends(get_current_user)):
++    rows = query_history(minutes)
++    return {"minutes": minutes, "count": len(rows), "snapshots": rows}
++
++@app.get("/api/latest")
++async def api_latest(current_user: dict = Depends(get_current_user)):
++    with db_lock:
++        cur = db_conn.cursor()
++        cur.execute("SELECT payload FROM metrics ORDER BY id DESC LIMIT 1")
++        r = cur.fetchone()
++    if not r:
++        return {}
++    return json.loads(r[0])
++
++@app.post("/api/export")
++async def api_export(current_user: dict = Depends(require_admin)):
++    data = {
++        "twin_state": twin_state,
++        "machines": machines_snapshot(),
++    }
++    return JSONResponse(content=data)
++
++@app.post("/api/import")
++async def api_import(payload: dict, current_user: dict = Depends(require_admin)):
++    ms = payload.get("machines")
++    ts = payload.get("twin_state")
++    if not isinstance(ms, list):
++        raise HTTPException(status_code=400, detail="Invalid machines list")
++    
++    machines.clear()
++    for m_data in ms:
++        machine = Machine(
++            m_data["id"], 
++            m_data.get("name", m_data["id"]), 
++            float(m_data.get("base_rate", 50)), 
++            int(m_data.get("position", 1))
++        )
++        machine.from_dict(m_data)
++        machines[machine.id] = machine
++    
++    normalize_machine_positions()
++    
++    if isinstance(ts, dict):
++        twin_state["staffing_shifts"] = int(ts.get("staffing_shifts", twin_state["staffing_shifts"]))
++        twin_state["ambient_temp"] = float(ts.get("ambient_temp", twin_state["ambient_temp"]))
++        twin_state["ambient_humidity"] = float(ts.get("ambient_humidity", twin_state["ambient_humidity"]))
++    return {"ok": True}
++
++@app.post("/api/reset")
++async def reset_simulation_endpoint(current_user: dict = Depends(require_admin)):
++    try:
++        reset_simulation()
++        return {"ok": True, "message": "Simulation reset to initial state"}
++    except Exception as e:
++        raise HTTPException(status_code=500, detail=f"Failed to reset simulation: {str(e)}")
++
++if __name__ == "__main__":
++    import uvicorn
++    uvicorn.run(app, host="0.0.0.0", port=8000)
++>>>>>>> Stashed changes
+diff --git a/requirements.txt b/requirements.txt
+new file mode 100644
+index 0000000..1c838d1
+--- /dev/null
++++ b/requirements.txt
+@@ -0,0 +1,5 @@
++fastapi[all]
++PyJWT==2.8.0
++passlib[bcrypt]==1.7.4
++bcrypt==4.0.1
++python-multipart==0.0.6
+\ No newline at end of file
+diff --git a/static/index.html b/static/index.html
+index 570686f..bd33477 100644
+--- a/static/index.html
++++ b/static/index.html
+@@ -5,6 +5,7 @@
+   <meta charset="utf-8" />
+   <title>Factory Floor Digital Twin Dashboard</title>
+   <style>
++<<<<<<< Updated upstream
+     body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial; margin: 12px; background: #f4f6f8; }
+     header { display:flex; gap:16px; align-items:center; }
+     .card { background:white; padding:12px; border-radius:10px; box-shadow:0 6px 20px rgba(20,20,40,0.06); margin-bottom:12px; }
+@@ -72,15 +73,443 @@
+           <select id="thr_select"></select>
+           <input type="number" id="thr_val" step="0.1" min="0.2" max="2.0" value="1.0"/>
+           <button id="set_thr">Set</button>
++=======
++    body { 
++      font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial; 
++      margin: 12px; 
++      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
++      min-height: 100vh;
++    }
++    header { 
++      display:flex; 
++      gap:16px; 
++      align-items:center; 
++      margin-bottom: 20px;
++      justify-content: space-between;
++      flex-wrap: wrap;
++    }
++    h1 {
++      color: white;
++      text-shadow: 0 2px 4px rgba(0,0,0,0.3);
++      margin: 0;
++    }
++    .card { 
++      background: rgba(255,255,255,0.95); 
++      padding: 16px; 
++      border-radius: 12px; 
++      box-shadow: 0 8px 32px rgba(0,0,0,0.1);
++      backdrop-filter: blur(10px);
++      border: 1px solid rgba(255,255,255,0.2);
++      margin-bottom: 16px; 
++    }
++    .grid { 
++      display: grid; 
++      grid-template-columns: 1fr 400px; 
++      gap: 20px; 
++    }
++    .machines { 
++      display: flex; 
++      flex-direction: column; 
++      gap: 12px; 
++      max-height: 65vh; 
++      overflow: auto; 
++    }
++    .machine { 
++      display: flex; 
++      justify-content: space-between; 
++      align-items: center; 
++      padding: 12px; 
++      border-radius: 10px; 
++      border: 2px solid #e5e7eb;
++      background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
++      transition: all 0.3s ease;
++    }
++    .machine:hover {
++      transform: translateY(-2px);
++      box-shadow: 0 4px 16px rgba(0,0,0,0.1);
++    }
++    .machine.offline {
++      border-color: #ef4444;
++      background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%);
++    }
++    .machine.online {
++      border-color: #10b981;
++      background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
++    }
++    button { 
++      padding: 10px 16px; 
++      border-radius: 8px; 
++      border: none; 
++      background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
++      color: white; 
++      cursor: pointer; 
++      font-weight: 500;
++      transition: all 0.3s ease;
++      margin: 4px;
++    }
++    button:hover {
++      transform: translateY(-1px);
++      box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
++    }
++    button:disabled {
++      background: #9ca3af;
++      cursor: not-allowed;
++      transform: none;
++      box-shadow: none;
++    }
++    button.secondary { 
++      background: linear-gradient(135deg, #10b981 0%, #047857 100%);
++    }
++    button.secondary:hover {
++      box-shadow: 0 4px 12px rgba(16, 185, 129, 0.4);
++    }
++    button.danger {
++      background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
++    }
++    button.danger:hover {
++      box-shadow: 0 4px 12px rgba(239, 68, 68, 0.4);
++    }
++    footer { 
++      margin-top: 20px; 
++      color: rgba(255,255,255,0.8); 
++      font-size: 13px; 
++      text-align: center;
++    }
++    label { 
++      font-size: 14px; 
++      color: #374151;
++      font-weight: 500;
++      display: block;
++      margin-bottom: 4px;
++    }
++    input[type="number"], input[type="text"], input[type="password"], select { 
++      padding: 8px 12px; 
++      border-radius: 6px; 
++      border: 2px solid #d1d5db; 
++      margin-right: 8px;
++      margin-bottom: 8px;
++      transition: border-color 0.3s ease;
++    }
++    input:focus, select:focus {
++      outline: none;
++      border-color: #3b82f6;
++      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
++    }
++    .bottleneck { 
++      color: #dc2626; 
++      font-weight: 700; 
++      background: #fef2f2;
++      padding: 4px 8px;
++      border-radius: 6px;
++      display: inline-block;
++    }
++    .connection-status {
++      padding: 4px 12px;
++      border-radius: 20px;
++      font-size: 12px;
++      font-weight: 500;
++    }
++    .connected {
++      background: #dcfce7;
++      color: #166534;
++    }
++    .disconnected {
++      background: #fee2e2;
++      color: #991b1b;
++    }
++    .metrics-grid {
++      display: grid;
++      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
++      gap: 16px;
++      margin-bottom: 16px;
++    }
++    .metric-card {
++      background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
++      padding: 12px;
++      border-radius: 8px;
++      border-left: 4px solid #3b82f6;
++    }
++    .control-section {
++      margin-bottom: 20px;
++      padding: 16px;
++      background: #f8fafc;
++      border-radius: 8px;
++      border-left: 4px solid #10b981;
++    }
++    .api-section {
++      margin-top: 16px;
++      padding: 12px;
++      background: #fef3c7;
++      border-radius: 8px;
++      border-left: 4px solid #f59e0b;
++    }
++    .preset-section {
++      margin-bottom: 20px;
++      padding: 16px;
++      background: #f0f9ff;
++      border-radius: 8px;
++      border-left: 4px solid #0284c7;
++    }
++    .preset-list {
++      max-height: 150px;
++      overflow-y: auto;
++      margin-top: 8px;
++    }
++    .preset-item {
++      display: flex;
++      justify-content: space-between;
++      align-items: center;
++      padding: 8px;
++      background: white;
++      margin-bottom: 4px;
++      border-radius: 4px;
++      border: 1px solid #e5e7eb;
++    }
++    
++    /* Authentication Styles */
++    .hidden { display: none !important; }
++    .login-container { 
++      max-width: 400px; 
++      margin: 100px auto; 
++      background: rgba(255,255,255,0.95);
++      padding: 32px;
++      border-radius: 12px;
++      box-shadow: 0 8px 32px rgba(0,0,0,0.2);
++    }
++    .auth-form { display: flex; flex-direction: column; gap: 16px; }
++    .form-group { margin-bottom: 16px; }
++    .form-group label { display: block; margin-bottom: 6px; font-weight: 500; }
++    .form-group input, .form-group select { width: 100%; box-sizing: border-box; }
++    .tab-buttons { display: flex; gap: 0; margin-bottom: 20px; border-radius: 8px; overflow: hidden; }
++    .tab-button { flex: 1; padding: 12px; border: none; background: #f3f4f6; cursor: pointer; }
++    .tab-button.active { background: #3b82f6; color: white; }
++    .error { color: #dc2626; font-size: 14px; margin-top: 8px; }
++    .success { color: #10b981; font-size: 14px; margin-top: 8px; }
++    .user-info { display: flex; align-items: center; gap: 12px; }
++    .role-badge { padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; }
++    .role-admin { background: #fef3c7; color: #92400e; }
++    .role-viewer { background: #dbeafe; color: #1e40af; }
++    .admin-only { opacity: 0.5; pointer-events: none; }
++    .demo-info {
++      margin-top: 16px;
++      padding: 12px;
++      background: #f0f9ff;
++      border-radius: 6px;
++      border-left: 4px solid #0ea5e9;
++      font-size: 13px;
++    }
++  </style>
++</head>
++<body>
++  <!-- Login/Register Screen -->
++  <div id="loginScreen" class="login-container">
++    <h2 style="text-align: center; margin-bottom: 24px;">🏭 Factory Digital Twin</h2>
++    
++    <div class="tab-buttons">
++      <button class="tab-button active" id="loginTab">Login</button>
++      <button class="tab-button" id="registerTab">Register</button>
++    </div>
++    
++    <!-- Login Form -->
++    <div id="loginForm">
++      <div class="auth-form">
++        <div class="form-group">
++          <label>Username:</label>
++          <input type="text" id="loginUsername" placeholder="Enter username" />
++        </div>
++        <div class="form-group">
++          <label>Password:</label>
++          <input type="password" id="loginPassword" placeholder="Enter password" />
++        </div>
++        <button id="loginBtn">Login</button>
++        <div id="loginError" class="error hidden"></div>
++      </div>
++      
++      <div class="demo-info">
++        <h4>Demo Credentials:</h4>
++        <p><strong>Admin:</strong> username: <code>admin</code>, password: <code>admin123</code></p>
++        <p><em>Admin users can control the simulation. Create a viewer account to test read-only access.</em></p>
++      </div>
++    </div>
++    
++    <!-- Register Form -->
++    <div id="registerForm" class="hidden">
++      <div class="auth-form">
++        <div class="form-group">
++          <label>Username:</label>
++          <input type="text" id="registerUsername" placeholder="Choose username (3+ chars)" />
++        </div>
++        <div class="form-group">
++          <label>Password:</label>
++          <input type="password" id="registerPassword" placeholder="Choose password (6+ chars)" />
++        </div>
++        <div class="form-group">
++          <label>Role:</label>
++          <select id="registerRole">
++            <option value="viewer">Viewer (Read-only)</option>
++            <option value="admin">Admin (Full control)</option>
++          </select>
++        </div>
++        <button id="registerBtn">Register</button>
++        <div id="registerError" class="error hidden"></div>
++        <div id="registerSuccess" class="success hidden"></div>
++      </div>
++    </div>
++  </div>
++
++  <!-- Main Application -->
++  <div id="mainApp" class="hidden">
++    <header>
++      <div style="display: flex; align-items: center; gap: 16px;">
++        <h1>🏭 Factory Floor Digital Twin Dashboard</h1>
++        <div class="card" style="padding:12px;">
++          <div><strong>Status:</strong> <span id="conn" class="connection-status disconnected">Disconnected</span></div>
++          <div><strong>Active Shifts:</strong> <span id="shifts">-</span></div>
++        </div>
++      </div>
++      
++      <div class="user-info">
++        <div class="card" style="padding: 8px;">
++          <div><strong>User:</strong> <span id="currentUsername">-</span></div>
++          <div><span id="currentUserRole" class="role-badge">-</span></div>
++        </div>
++        <button id="logoutBtn" class="danger">Logout</button>
++      </div>
++    </header>
++
++    <main class="grid">
++      <section>
++        <div class="card">
++          <h3>📊 Live Metrics</h3>
++          <div class="metrics-grid">
++            <div class="metric-card">
++              <div><strong>Time:</strong></div>
++              <div id="time">-</div>
++            </div>
++            <div class="metric-card">
++              <div><strong>Total Output:</strong></div>
++              <div id="total_output">0</div>
++            </div>
++            <div class="metric-card">
++              <div><strong>Temperature:</strong></div>
++              <div id="temperature">-</div>
++            </div>
++            <div class="metric-card">
++              <div><strong>Humidity:</strong></div>
++              <div id="humidity">-</div>
++            </div>
++          </div>
++          <div style="margin-top:16px;">
++            <strong>🚨 Bottlenecks:</strong> 
++            <span id="bottlenecks">None detected</span>
++          </div>
++        </div>
++
++        <div class="card">
++          <h3>🔧 Production Machines</h3>
++          <div class="machines" id="machines">
++            <div style="text-align: center; padding: 20px; color: #6b7280;">
++              Loading machines...
++            </div>
++          </div>
++        </div>
++
++        <div class="card api-section">
++          <h3>🔗 REST API Integration</h3>
++          <div style="margin-bottom: 12px;">
++            <button id="fetch_machines">🔄 Fetch Machines (GET)</button>
++            <button id="fetch_presets" class="secondary">📋 Fetch Presets (GET)</button>
++            <button id="refresh_dashboard" class="secondary">📊 Refresh Dashboard</button>
++          </div>
++          <div id="api_response" style="background: white; padding: 8px; border-radius: 4px; font-family: monospace; font-size: 12px; max-height: 150px; overflow: auto;"></div>
++>>>>>>> Stashed changes
+         </div>
++      </section>
+ 
++<<<<<<< Updated upstream
+         <div style="margin-bottom:8px;">
+           <label>Add new machine</label><br/>
+           <input type="text" id="new_id" placeholder="machine id" value="M_new"/>
+           <input type="number" id="new_rate" placeholder="base rate" value="45"/>
+           <button id="add_machine">Add machine</button>
++=======
++      <aside>
++        <div class="card" id="controlsCard">
++          <h3>🎛️ Simulation Controls</h3>
++          
++          <div id="adminOnlyMessage" class="hidden" style="color: #dc2626; font-style: italic; margin-bottom: 16px; padding: 12px; background: #fef2f2; border-radius: 6px;">
++            🔒 Admin access required for controls. Current user has read-only access.
++          </div>
++
++          <div class="preset-section">
++            <label>💾 Configuration Presets</label>
++            <div style="margin-bottom: 8px;">
++              <input type="text" id="preset_name" placeholder="Preset name" style="width: 60%;"/>
++              <button id="save_preset" class="secondary">💾 Save Preset</button>
++            </div>
++            <div id="preset_list" class="preset-list">
++              <div style="color: #6b7280; font-style: italic;">Loading presets...</div>
++            </div>
++          </div>
++
++          <div class="control-section">
++            <label>👥 Staffing Management</label>
++            <button id="add_shift" class="secondary">➕ Add Shift</button>
++            <button id="remove_shift" class="danger">➖ Remove Shift</button>
++          </div>
++
++          <div class="control-section">
++            <label>🔌 Machine Power Control</label>
++            <select id="toggle_select">
++              <option>Select machine...</option>
++            </select>
++            <button id="toggle_machine">⚡ Toggle Power</button>
++          </div>
++
++          <div class="control-section">
++            <label>📍 Equipment Positioning</label>
++            <select id="move_select">
++              <option>Select machine...</option>
++            </select>
++            <input type="number" id="move_pos" min="1" max="10" value="1" placeholder="Position"/>
++            <button id="move_btn">🚚 Move Equipment</button>
++          </div>
++
++          <div class="control-section">
++            <label>⚙️ Throughput Adjustment (0.2 - 2.0x)</label>
++            <select id="thr_select">
++              <option>Select machine...</option>
++            </select>
++            <input type="number" id="thr_val" step="0.1" min="0.2" max="2.0" value="1.0" placeholder="Factor"/>
++            <button id="set_thr">⚙️ Set Throughput</button>
++          </div>
++
++          <div class="control-section">
++            <label>➕ Add New Machine</label>
++            <input type="text" id="new_name" placeholder="Machine name" value="New Station"/>
++            <input type="number" id="new_rate" placeholder="Items/min" value="45" min="1" max="200"/>
++            <input type="number" id="new_position" placeholder="Position" value="1" min="1"/>
++            <button id="add_machine">🏭 Add Machine</button>
++          </div>
++
++          <div class="control-section">
++            <label>🗑️ Machine Management</label>
++            <select id="delete_select">
++              <option>Select machine to delete...</option>
++            </select>
++            <button id="delete_machine" class="danger">🗑️ Delete Machine</button>
++          </div>
++
++          <div class="control-section">
++            <label>🔄 System Controls</label>
++            <button id="reset_simulation" class="danger">🔄 Reset Simulation</button>
++          </div>
++>>>>>>> Stashed changes
+         </div>
++      </aside>
++    </main>
+ 
++<<<<<<< Updated upstream
+         <div style="margin-top:12px;">
+           <small>Commands are applied to the live twin and will update the dashboard instantly.</small>
+         </div>
+@@ -107,21 +536,246 @@
+     ws = new WebSocket(`ws://${location.host}/ws`);
+     ws.onopen = () => {
+       document.getElementById('conn').innerText = 'connected';
++=======
++    <footer>
++      🚀 Enhanced factory digital twin with authentication, role-based access control, and advanced monitoring
++    </footer>
++  </div>
++
++<script>
++  let ws;
++  let currentUser = null;
++  let authToken = null;
++  let machines_data = [];
++
++  // Authentication functions
++  function getStoredToken() {
++    return sessionStorage.getItem('factory_auth_token');
++  }
++
++  function storeToken(token) {
++    sessionStorage.setItem('factory_auth_token', token);
++    authToken = token;
++  }
++
++  function clearToken() {
++    sessionStorage.removeItem('factory_auth_token');
++    authToken = null;
++  }
++
++  function showLoginScreen() {
++    document.getElementById('loginScreen').classList.remove('hidden');
++    document.getElementById('mainApp').classList.add('hidden');
++  }
++
++  function showMainApp() {
++    document.getElementById('loginScreen').classList.add('hidden');
++    document.getElementById('mainApp').classList.remove('hidden');
++  }
++
++  function updateUIForRole(role) {
++    const controlsCard = document.getElementById('controlsCard');
++    const adminMessage = document.getElementById('adminOnlyMessage');
++    
++    if (role === 'admin') {
++      controlsCard.classList.remove('admin-only');
++      adminMessage.classList.add('hidden');
++    } else {
++      controlsCard.classList.add('admin-only');
++      adminMessage.classList.remove('hidden');
++    }
++  }
++
++  function updateUserDisplay(user) {
++    document.getElementById('currentUsername').textContent = user.username;
++    const roleSpan = document.getElementById('currentUserRole');
++    roleSpan.textContent = user.role.toUpperCase();
++    roleSpan.className = `role-badge role-${user.role}`;
++    updateUIForRole(user.role);
++  }
++
++  async function login(username, password) {
++    try {
++      const response = await fetch('/api/token', {
++        method: 'POST',
++        headers: {
++          'Content-Type': 'application/json',
++        },
++        body: JSON.stringify({ username, password })
++      });
++
++      if (!response.ok) {
++        const error = await response.json();
++        throw new Error(error.detail || 'Login failed');
++      }
++
++      const data = await response.json();
++      storeToken(data.access_token);
++      currentUser = data.user;
++      updateUserDisplay(currentUser);
++      showMainApp();
++      connect();
++      fetchPresets();
++      return true;
++    } catch (error) {
++      document.getElementById('loginError').textContent = error.message;
++      document.getElementById('loginError').classList.remove('hidden');
++      return false;
++    }
++  }
++
++  async function register(username, password, role) {
++    try {
++      const response = await fetch('/api/register', {
++        method: 'POST',
++        headers: {
++          'Content-Type': 'application/json',
++        },
++        body: JSON.stringify({ username, password, role })
++      });
++
++      if (!response.ok) {
++        const error = await response.json();
++        throw new Error(error.detail || 'Registration failed');
++      }
++
++      const data = await response.json();
++      document.getElementById('registerSuccess').textContent = 'Registration successful! You can now login.';
++      document.getElementById('registerSuccess').classList.remove('hidden');
++      document.getElementById('registerError').classList.add('hidden');
++      
++      // Clear form
++      document.getElementById('registerUsername').value = '';
++      document.getElementById('registerPassword').value = '';
++      
++      // Switch to login tab
++      setTimeout(() => {
++        document.getElementById('loginTab').click();
++      }, 1500);
++      
++      return true;
++    } catch (error) {
++      document.getElementById('registerError').textContent = error.message;
++      document.getElementById('registerError').classList.remove('hidden');
++      document.getElementById('registerSuccess').classList.add('hidden');
++      return false;
++    }
++  }
++
++  async function logout() {
++    clearToken();
++    currentUser = null;
++    if (ws) {
++      ws.close();
++    }
++    showLoginScreen();
++  }
++
++  async function checkAuthAndInitialize() {
++    const token = getStoredToken();
++    if (!token) {
++      showLoginScreen();
++      return;
++    }
++
++    try {
++      const response = await fetch('/api/me', {
++        headers: {
++          'Authorization': `Bearer ${token}`
++        }
++      });
++
++      if (response.ok) {
++        const user = await response.json();
++        authToken = token;
++        currentUser = user;
++        updateUserDisplay(currentUser);
++        showMainApp();
++        connect();
++        fetchPresets();
++      } else {
++        clearToken();
++        showLoginScreen();
++      }
++    } catch (error) {
++      clearToken();
++      showLoginScreen();
++    }
++  }
++
++  function connect() {
++    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
++    const wsUrl = `${protocol}//${location.host}/ws${authToken ? `?token=${authToken}` : ''}`;
++    console.log('Connecting to WebSocket:', wsUrl);
++    
++    ws = new WebSocket(wsUrl);
++    
++    ws.onopen = () => {
++      document.getElementById('conn').innerText = 'Connected';
++      document.getElementById('conn').className = 'connection-status connected';
++      console.log('WebSocket connected');
++>>>>>>> Stashed changes
+     };
+     ws.onclose = () => {
++<<<<<<< Updated upstream
+       document.getElementById('conn').innerText = 'disconnected';
+       setTimeout(connect, 1500);
++=======
++      document.getElementById('conn').innerText = 'Disconnected';
++      document.getElementById('conn').className = 'connection-status disconnected';
++      console.log('WebSocket disconnected, attempting to reconnect...');
++      if (currentUser) {
++        setTimeout(connect, 2000);
++      }
++>>>>>>> Stashed changes
+     };
+     ws.onmessage = (evt) => {
++<<<<<<< Updated upstream
+       const obj = JSON.parse(evt.data);
+       if (obj.type === 'metrics') {
+         renderMetrics(obj.payload);
++=======
++      try {
++        const obj = JSON.parse(evt.data);
++        console.log('Received message:', obj);
++        
++        if (obj.type === 'metrics') {
++          renderMetrics(obj.payload);
++        } else if (obj.type === 'machines_updated') {
++          machines_data = obj.machines || [];
++          updateMachineSelectors();
++        } else if (obj.type === 'auth_status') {
++          console.log('Auth status:', obj.payload);
++        } else if (obj.type === 'error') {
++          console.error('Server error:', obj.payload);
++          if (obj.payload.includes('authentication required') || obj.payload.includes('admin access required')) {
++            alert(`Access denied: ${obj.payload}`);
++          } else {
++            alert(`Server error: ${obj.payload}`);
++          }
++        }
++      } catch (e) {
++        console.error('Error parsing message:', e, evt.data);
++>>>>>>> Stashed changes
+       }
+     };
+   }
+ 
+   function sendAction(actionObj) {
++<<<<<<< Updated upstream
+     if (!ws || ws.readyState !== 1) return alert("Not connected yet");
++=======
++    if (!currentUser || currentUser.role !== 'admin') {
++      alert('Admin access required for this action');
++      return;
++    }
++    
++    if (!ws || ws.readyState !== WebSocket.OPEN) {
++      alert("WebSocket not connected. Please wait for connection.");
++      return;
++    }
++    console.log('Sending action:', actionObj);
++>>>>>>> Stashed changes
+     ws.send(JSON.stringify(actionObj));
+   }
+ 
+@@ -162,10 +816,277 @@
+     });
+   }
+ 
++<<<<<<< Updated upstream
+   // wire buttons
++=======
++  function updateMachineSelectors() {
++    const selectors = ['toggle_select', 'move_select', 'thr_select', 'delete_select'];
++    
++    selectors.forEach(selectorId => {
++      const select = document.getElementById(selectorId);
++      const currentValue = select.value;
++      select.innerHTML = '<option>Select machine...</option>';
++      
++      machines_data.forEach(m => {
++        const option = document.createElement('option');
++        option.value = m.id;
++        option.text = `${m.name || m.id} (Pos: ${m.position})`;
++        select.appendChild(option);
++      });
++      
++      if (currentValue && machines_data.some(m => m.id === currentValue)) {
++        select.value = currentValue;
++      }
++    });
++  }
++
++  // REST API functions
++  async function fetchMachines() {
++    try {
++      const response = await fetch('/api/machines', {
++        headers: {
++          'Authorization': `Bearer ${authToken}`
++        }
++      });
++      const data = await response.json();
++      document.getElementById('api_response').innerText = JSON.stringify(data, null, 2);
++      console.log('Fetched machines:', data);
++    } catch (error) {
++      document.getElementById('api_response').innerText = `Error: ${error.message}`;
++      console.error('Error fetching machines:', error);
++    }
++  }
++
++  async function fetchPresets() {
++    try {
++      const response = await fetch('/api/presets', {
++        headers: {
++          'Authorization': `Bearer ${authToken}`
++        }
++      });
++      const data = await response.json();
++      renderPresets(data);
++      console.log('Fetched presets:', data);
++    } catch (error) {
++      document.getElementById('preset_list').innerHTML = '<div style="color: #ef4444;">Error loading presets</div>';
++      console.error('Error fetching presets:', error);
++    }
++  }
++
++  function renderPresets(presets) {
++    const presetList = document.getElementById('preset_list');
++    
++    if (!presets || presets.length === 0) {
++      presetList.innerHTML = '<div style="color: #6b7280; font-style: italic;">No presets saved</div>';
++      return;
++    }
++
++    presetList.innerHTML = '';
++    presets.forEach(preset => {
++      const presetDiv = document.createElement('div');
++      presetDiv.className = 'preset-item';
++      presetDiv.innerHTML = `
++        <div>
++          <div style="font-weight: 500;">${preset.name}</div>
++          <div style="font-size: 11px; color: #6b7280;">${preset.description || 'No description'}</div>
++        </div>
++        <div>
++          <button onclick="loadPreset(${preset.id})" style="padding: 4px 8px; font-size: 11px;">Load</button>
++          <button onclick="deletePreset(${preset.id})" style="padding: 4px 8px; font-size: 11px; background: #ef4444;">Del</button>
++        </div>
++      `;
++      presetList.appendChild(presetDiv);
++    });
++  }
++
++  async function savePreset() {
++    if (!currentUser || currentUser.role !== 'admin') {
++      alert('Admin access required');
++      return;
++    }
++    
++    const name = document.getElementById('preset_name').value.trim();
++    if (!name) {
++      alert('Please enter a preset name');
++      return;
++    }
++
++    try {
++      const response = await fetch('/api/presets', {
++        method: 'POST',
++        headers: {
++          'Content-Type': 'application/json',
++          'Authorization': `Bearer ${authToken}`
++        },
++        body: JSON.stringify({
++          name: name,
++          description: `Saved on ${new Date().toLocaleString()}`
++        })
++      });
++
++      if (response.ok) {
++        document.getElementById('preset_name').value = '';
++        fetchPresets();
++        alert('Preset saved successfully!');
++      } else {
++        const error = await response.json();
++        alert(`Error saving preset: ${error.detail}`);
++      }
++    } catch (error) {
++      console.error('Error saving preset:', error);
++      alert('Error saving preset');
++    }
++  }
++
++  async function loadPreset(presetId) {
++    if (!currentUser || currentUser.role !== 'admin') {
++      alert('Admin access required');
++      return;
++    }
++    
++    try {
++      const response = await fetch(`/api/presets/${presetId}/load`, {
++        method: 'POST',
++        headers: {
++          'Authorization': `Bearer ${authToken}`
++        }
++      });
++
++      if (response.ok) {
++        const result = await response.json();
++        alert(result.message);
++      } else {
++        const error = await response.json();
++        alert(`Error loading preset: ${error.detail}`);
++      }
++    } catch (error) {
++      console.error('Error loading preset:', error);
++      alert('Error loading preset');
++    }
++  }
++
++  async function deletePreset(presetId) {
++    if (!currentUser || currentUser.role !== 'admin') {
++      alert('Admin access required');
++      return;
++    }
++    
++    if (!confirm('Are you sure you want to delete this preset?')) {
++      return;
++    }
++
++    try {
++      const response = await fetch(`/api/presets/${presetId}`, {
++        method: 'DELETE',
++        headers: {
++          'Authorization': `Bearer ${authToken}`
++        }
++      });
++
++      if (response.ok) {
++        fetchPresets();
++        alert('Preset deleted successfully!');
++      } else {
++        const error = await response.json();
++        alert(`Error deleting preset: ${error.detail}`);
++      }
++    } catch (error) {
++      console.error('Error deleting preset:', error);
++      alert('Error deleting preset');
++    }
++  }
++
++  async function deleteMachine(machineId) {
++    if (!currentUser || currentUser.role !== 'admin') {
++      alert('Admin access required');
++      return;
++    }
++    
++    try {
++      const response = await fetch(`/api/machines/${machineId}`, {
++        method: 'DELETE',
++        headers: {
++          'Authorization': `Bearer ${authToken}`
++        }
++      });
++      const data = await response.json();
++      document.getElementById('api_response').innerText = `Deleted: ${JSON.stringify(data, null, 2)}`;
++      console.log('Deleted machine:', data);
++    } catch (error) {
++      document.getElementById('api_response').innerText = `Error: ${error.message}`;
++      console.error('Error deleting machine:', error);
++    }
++  }
++
++  // Event listeners
++>>>>>>> Stashed changes
+   document.addEventListener('DOMContentLoaded', () => {
+-    connect();
++    checkAuthAndInitialize();
++
++<<<<<<< Updated upstream
++=======
++    // Authentication event handlers
++    document.getElementById('loginTab').onclick = () => {
++      document.getElementById('loginTab').classList.add('active');
++      document.getElementById('registerTab').classList.remove('active');
++      document.getElementById('loginForm').classList.remove('hidden');
++      document.getElementById('registerForm').classList.add('hidden');
++      document.getElementById('loginError').classList.add('hidden');
++    };
++
++    document.getElementById('registerTab').onclick = () => {
++      document.getElementById('registerTab').classList.add('active');
++      document.getElementById('loginTab').classList.remove('active');
++      document.getElementById('registerForm').classList.remove('hidden');
++      document.getElementById('loginForm').classList.add('hidden');
++      document.getElementById('registerError').classList.add('hidden');
++      document.getElementById('registerSuccess').classList.add('hidden');
++    };
++
++    document.getElementById('loginBtn').onclick = async () => {
++      const username = document.getElementById('loginUsername').value.trim();
++      const password = document.getElementById('loginPassword').value;
++      
++      if (!username || !password) {
++        document.getElementById('loginError').textContent = 'Please enter both username and password';
++        document.getElementById('loginError').classList.remove('hidden');
++        return;
++      }
++      
++      document.getElementById('loginError').classList.add('hidden');
++      await login(username, password);
++    };
++
++    document.getElementById('registerBtn').onclick = async () => {
++      const username = document.getElementById('registerUsername').value.trim();
++      const password = document.getElementById('registerPassword').value;
++      const role = document.getElementById('registerRole').value;
++      
++      if (!username || !password) {
++        document.getElementById('registerError').textContent = 'Please enter both username and password';
++        document.getElementById('registerError').classList.remove('hidden');
++        return;
++      }
++      
++      document.getElementById('registerError').classList.add('hidden');
++      await register(username, password, role);
++    };
++
++    document.getElementById('logoutBtn').onclick = logout;
++
++    // Allow Enter key to submit forms
++    document.getElementById('loginPassword').addEventListener('keypress', (e) => {
++      if (e.key === 'Enter') document.getElementById('loginBtn').click();
++    });
++    document.getElementById('registerPassword').addEventListener('keypress', (e) => {
++      if (e.key === 'Enter') document.getElementById('registerBtn').click();
++    });
++
++    // Preset management
++    document.getElementById('save_preset').onclick = savePreset;
+ 
++    // WebSocket controls
++>>>>>>> Stashed changes
+     document.getElementById('add_shift').onclick = () => sendAction({action:'add_shift'});
+     document.getElementById('remove_shift').onclick = () => sendAction({action:'remove_shift'});
+     document.getElementById('toggle_machine').onclick = () => {
+diff --git a/twin_history.db b/twin_history.db
+new file mode 100644
+index 0000000..dd7dec7
+Binary files /dev/null and b/twin_history.db differ

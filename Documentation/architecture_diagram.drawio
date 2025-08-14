@@ -1,0 +1,63 @@
+<mxfile host="app.diagrams.net" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36" version="28.1.0">
+  <diagram name="Tech Stack / Architecture (Matching Style)" id="0">
+    <mxGraphModel dx="1209" dy="765" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1700" pageHeight="1200" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="2" value="&lt;b&gt;&lt;font style=&quot;font-size: 23px;&quot;&gt;Frontend:&lt;/font&gt;&lt;/b&gt;&lt;br&gt;&lt;i&gt;HTML, CSS, JS, Chart.js, WS Client&lt;/i&gt;" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#ffffff;fillColor=#0066cc;fontColor=#ffffff;" parent="1" vertex="1">
+          <mxGeometry x="170" y="500" width="320" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="3" value="&lt;font style=&quot;font-size: 23px;&quot;&gt;&lt;b&gt;Backend:&lt;/b&gt;&lt;/font&gt;&lt;br&gt;&lt;i&gt;Python, FastAPI, Uvicorn, Simulation Engine&lt;/i&gt;" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#ffffff;fillColor=#0066cc;fontColor=#ffffff;" parent="1" vertex="1">
+          <mxGeometry x="620" y="290" width="320" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="4" value="&lt;font style=&quot;font-size: 23px;&quot;&gt;&lt;b&gt;Storage:&lt;/b&gt;&lt;/font&gt;&lt;br&gt;&lt;i&gt;SQLite, InfluxDB/TimescaleDB&lt;/i&gt;" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#ffffff;fillColor=#0066cc;fontColor=#ffffff;" parent="1" vertex="1">
+          <mxGeometry x="1040" y="500" width="320" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="5" value="&lt;b&gt;&lt;font style=&quot;font-size: 23px;&quot;&gt;Containerization:&lt;/font&gt;&lt;/b&gt;&lt;br&gt;&lt;i&gt;Docker, Docker Compose&lt;/i&gt;" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#ffffff;fillColor=#888888;fontColor=#ffffff;" parent="1" vertex="1">
+          <mxGeometry x="620" y="710" width="320" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="201" value="WebSocket (real-time)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#ff9900;endArrow=classic;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="2" target="3" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="310" y="330" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="203" value="Runs" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#A50040;endArrow=classic;fillColor=#d80073;" parent="1" source="5" target="2" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="204" value="Runs" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#A50040;endArrow=classic;exitX=0.75;exitY=0;exitDx=0;exitDy=0;entryX=0.75;entryY=1;entryDx=0;entryDy=0;fillColor=#d80073;" parent="1" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="800" y="710" as="sourcePoint" />
+            <mxPoint x="800" y="370" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="205" value="Runs" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#A50040;endArrow=classic;fillColor=#d80073;" parent="1" source="5" target="4" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="HxpjBHRTx_HjAjPJXyA2-205" value="" style="endArrow=classic;startArrow=classic;html=1;rounded=0;entryX=1;entryY=1;entryDx=0;entryDy=0;exitX=0;exitY=0;exitDx=0;exitDy=0;fillColor=#0050ef;strokeColor=light-dark(#001DBC,#001DBC);" edge="1" parent="1" source="4" target="3">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="760" y="610" as="sourcePoint" />
+            <mxPoint x="810" y="560" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="HxpjBHRTx_HjAjPJXyA2-206" value="Read/Write Data" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="HxpjBHRTx_HjAjPJXyA2-205">
+          <mxGeometry x="-0.1071" relative="1" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="HxpjBHRTx_HjAjPJXyA2-207" value="" style="endArrow=classic;startArrow=classic;html=1;rounded=0;entryX=0;entryY=1;entryDx=0;entryDy=0;exitX=1;exitY=0;exitDx=0;exitDy=0;strokeColor=light-dark(#000000,#001DBC);" edge="1" parent="1" source="2" target="3">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="620" y="520" as="sourcePoint" />
+            <mxPoint x="670" y="470" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="HxpjBHRTx_HjAjPJXyA2-208" value="REST API (initial load)" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="HxpjBHRTx_HjAjPJXyA2-207">
+          <mxGeometry x="-0.3263" y="-1" relative="1" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
