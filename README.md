@@ -1,26 +1,61 @@
 # Factory_Floor_Digital_Twin
+
+Here is an overview of the setup process for the Factory Floor Digital Twin project:
+
 ## Prerequisites
 
-Before you begin, ensure you have the following installed on your system:
+- **Python 3.7+**: [Download Python](https://www.python.org/downloads/)
+- **pip**: Usually included with Python installations.
 
-*   **Python 3.7+**: Download and install Python from the [official website](https://www.python.org/downloads/).
-*   **pip**: The Python package installer. It's usually included with Python installations.
+## Installation (Local Development)
 
-## Installation
-
-1.  **Install project dependencies**: Use `pip` to install the required libraries. This includes FastAPI, Uvicorn, and Jinja2.
-
+1. **Install project dependencies**:
     ```bash
     pip install "fastapi[all]"
+    pip install paho-mqtt python-multipart
+    ```
+2. **Run the application**:
+    ```bash
+    uvicorn backend:app --host 0.0.0.0 --port 8000
+    ```
+   The server will be available at [http://localhost:8000](http://localhost:8000).
+
+## Dockerized Setup
+
+### Run with Docker Compose (Recommended)
+
+1. **Build and start the containers**:
+    ```bash
+    docker-compose up --build
+    ```
+2. **Access**: Open [http://localhost:8000](http://localhost:8000) in your browser.
+3. **Stop containers**:
+    ```bash
+    docker-compose down
     ```
 
-    - **paho-mqtt**: Used for MQTT messaging between devices and the backend, enabling real-time communication in the digital twin environment.
-    - **python-multipart**: Required by FastAPI to handle file uploads via multipart/form-data requests.
+### Run with Docker Only
+
+1. **Build the Docker image**:
+    ```bash
+    docker build -t factory-floor-digital-twin .
+    ```
+2. **Run the container**:
+    ```bash
+    docker run -d -p 8000:8000 factory-floor-digital-twin
+    ```
+3. **Access**: Open [http://localhost:8000](http://localhost:8000).
+
+## Demo Credentials
+
+- **Admin**: username: `admin`, password: `admin123`
+- You can register new users (Admin or Viewer roles) via the web UI.
 
 
-## Running the Application
+## Documentation diagrams:
+### 1. Architecture Diagram
+![Architecture Diagram](Documentation/architecture_diagram.png)
 
-To start the application, navigate to your project's root directory in the terminal and run the following command. The `--reload` flag enables hot-reloading, so the server will automatically restart when you make changes to your code.
+### 2. Process Flow Diagram
+![Process Flow Diagram](Documentation/process_flow_diagram.png)
 
-```bash
-uvicorn backend:app --host 0.0.0.0 --port 8000

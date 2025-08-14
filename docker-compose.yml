@@ -1,0 +1,25 @@
+services:
+  backend:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+    command: python -m uvicorn backend:app --reload --host 0.0.0.0 --port 8000
+
+  streamlit:
+    build: .
+    depends_on:
+      - backend
+    environment:
+      - BACKEND_BASE_URL=http://backend:8000
+      # Auto-login credentials for ai_Predictive.py (override in .env for non-dev)
+      - BACKEND_USERNAME=${BACKEND_USERNAME:-admin}
+      - BACKEND_PASSWORD=${BACKEND_PASSWORD:-admin123}
+      # If you prefer supplying a ready token instead of auto-login, set BACKEND_JWT_TOKEN
+      - BACKEND_JWT_TOKEN=${BACKEND_JWT_TOKEN:-}
+    command: python -m streamlit run ai_Predictive.py --server.address 0.0.0.0 --server.port 8501
+    ports:
+      - "8501:8501"
+    volumes:
+      - .:/app
