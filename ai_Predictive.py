@@ -1,10 +1,12 @@
 # pdm_single_file_app_pro_sim.py
+import os
 import numpy as np
 import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime, timedelta, date
+import requests
 
 st.set_page_config(page_title="AI Predictive Maintenance - Pro + Simulator", layout="wide")
 
@@ -24,35 +26,176 @@ DOWNTIME_COST_PER_HOUR = {
 }
 EXPECTED_HOURS_IF_FAIL = 4  # estimated downtime hours per failure
 
+# ---- Backend integration settings ----
+BACKEND_BASE_URL = os.getenv("BACKEND_BASE_URL", "").strip()
+# If a token is provided, we'll use it; otherwise we will auto-login
+BACKEND_JWT_TOKEN = os.getenv("BACKEND_JWT_TOKEN", "").strip()
+BACKEND_USERNAME = os.getenv("BACKEND_USERNAME", "admin").strip()
+BACKEND_PASSWORD = os.getenv("BACKEND_PASSWORD", "admin123").strip()
+
+def _backend_url(path: str) -> str:
+    return f"{BACKEND_BASE_URL.rstrip('/')}{path}"
+
+def _login_for_token() -> str | None:
+    """
+    Attempt to log in to the FastAPI backend using BACKEND_USERNAME/PASSWORD
+    and return an access token. Returns None on failure.
+    """
+    if not BACKEND_BASE_URL:
+        return None
+    try:
+        resp = requests.post(
+            _backend_url("/api/token"),
+            json={"username": BACKEND_USERNAME, "password": BACKEND_PASSWORD},
+            timeout=6,
+        )
+        if resp.ok:
+            data = resp.json()
+            return data.get("access_token")
+    except Exception:
+        pass
+    return None
+
+def get_backend_token() -> str | None:
+    """
+    Resolve a token to call protected backend endpoints:
+    - Use BACKEND_JWT_TOKEN env if present
+    - Otherwise cache one in session_state by auto-logging in
+    """
+    if BACKEND_JWT_TOKEN:
+        return BACKEND_JWT_TOKEN
+
+    token = st.session_state.get("backend_token")
+    if token:
+        return token
+
+    token = _login_for_token()
+    if token:
+        st.session_state["backend_token"] = token
+        return token
+    return None
+
+def backend_get_json(path: str, retry_once: bool = True):
+    """
+    GET helper that attaches Authorization header automatically.
+    If a 401 is returned, it will re-login once and retry.
+    Returns (json_or_none, status_code).
+    """
+    if not BACKEND_BASE_URL:
+        return None, None
+
+    token = get_backend_token()
+    headers = {}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    try:
+        resp = requests.get(_backend_url(path), headers=headers, timeout=6)
+        if resp.status_code == 401 and retry_once:
+            # Token might be expired or invalid, re-login and retry once
+            st.session_state.pop("backend_token", None)
+            new_token = _login_for_token()
+            if new_token:
+                st.session_state["backend_token"] = new_token
+                headers["Authorization"] = f"Bearer {new_token}"
+                resp = requests.get(_backend_url(path), headers=headers, timeout=6)
+        if resp.ok:
+            return resp.json(), resp.status_code
+        return None, resp.status_code
+    except Exception:
+        return None, None
+
+def try_load_backend_machines(base_url: str | None, token: str | None = None):
+    """
+    Optionally pull live machine list from FastAPI backend (/api/latest).
+    This keeps the Streamlit UI unchanged; if the call fails, we fall back
+    to locally generated dummy machines.
+    """
+    if not base_url:
+        return None
+
+    data, status = backend_get_json("/api/latest")
+    if not data or "machines" not in data:
+        return None
+
+    machines = data.get("machines") or []
+    if not machines:
+        return None
+
+    # FIX: stable sort by position; if missing, fall back to original order
+    sorted_machines = [
+        m for _, m in sorted(
+            enumerate(machines),
+            key=lambda pair: (
+                pair[1].get("position") is None,
+                pair[1].get("position", pair[0])
+            )
+        )
+    ]
+
+    # Map backend machines into generator-friendly structure (cap at 4 to fit existing layout)
+    mapped = []
+    for i, m in enumerate(sorted_machines[:4]):
+        base_rate = float(m.get("base_rate", 50.0))
+        # derive stable pseudo sensor baselines from base_rate/id hash
+        br_mod = (base_rate % 25.0)
+        temp_base = 65.0 + br_mod            # ~65-90
+        vib_base = 0.30 + (br_mod % 10) / 100.0  # ~0.30-0.40
+        press_base = 4.8 + (br_mod % 7) / 10.0   # ~4.8-5.5
+        mapped.append({
+            "id": m.get("id", f"M{i+1}"),
+            "name": m.get("name", f"Machine {i+1}"),
+            "temp_base": float(temp_base),
+            "vib_base": float(vib_base),
+            "press_base": float(press_base),
+            "last_maint": datetime.utcnow() - timedelta(days=int(np.random.randint(6, 12)))
+        })
+    return mapped
+
 # -----------------------------
-# 1) Generate dummy data in-code
+# 1) Generate data (optionally seeded from backend machine list)
 # -----------------------------
 @st.cache_data
-def make_data(seed: int = 42):
+def make_data(seed: int = 42, backend_base_url: str | None = None, backend_token_marker: str = "auto"):
+    """
+    backend_token_marker exists only to let Streamlit cache invalidate when the token source flips
+    (e.g., env token provided vs auto-login). We don't store the sensitive token itself here.
+    """
     np.random.seed(seed)
 
     end_date = datetime(2025, 8, 14)
     start_date = end_date - timedelta(days=29)  # 30 days
     dates = pd.date_range(start_date, end_date, freq="D")
 
-    machines = [
-        {"id": "M1", "name": "M1 Cutting", "temp_base": 70, "vib_base": 0.35, "press_base": 5.1, "last_maint": datetime(2025, 7, 18)},
-        {"id": "M2", "name": "M2 Press",   "temp_base": 82, "vib_base": 0.55, "press_base": 5.3, "last_maint": datetime(2025, 7, 16)},
-        {"id": "M3", "name": "M3 Paint",   "temp_base": 66, "vib_base": 0.30, "press_base": 4.9, "last_maint": datetime(2025, 7, 22)},
-        {"id": "M4", "name": "M4 Inspect", "temp_base": 78, "vib_base": 0.42, "press_base": 5.0, "last_maint": datetime(2025, 7, 20)},
-    ]
+    machines_from_backend = try_load_backend_machines(backend_base_url)
 
-    failure_dates = {
-        "M1 Cutting": [datetime(2025, 7, 30)],
-        "M2 Press":   [datetime(2025, 8, 10)],
-        "M3 Paint":   [datetime(2025, 8, 12)],
-        "M4 Inspect": [datetime(2025, 8, 5)],
-    }
+    if machines_from_backend:
+        machines = machines_from_backend
+        # generic failure dates per machine (1 event randomly placed in window)
+        failure_dates = {}
+        for m in machines:
+            # Choose one failure event between start_date+10 and end_date-2
+            fail_day = start_date + timedelta(days=int(np.random.randint(10, 26)))
+            failure_dates[m["name"]] = [fail_day]
+    else:
+        machines = [
+            {"id": "M1", "name": "M1 Cutting", "temp_base": 70, "vib_base": 0.35, "press_base": 5.1, "last_maint": datetime(2025, 7, 18)},
+            {"id": "M2", "name": "M2 Press",   "temp_base": 82, "vib_base": 0.55, "press_base": 5.3, "last_maint": datetime(2025, 7, 16)},
+            {"id": "M3", "name": "M3 Paint",   "temp_base": 66, "vib_base": 0.30, "press_base": 4.9, "last_maint": datetime(2025, 7, 22)},
+            {"id": "M4", "name": "M4 Inspect", "temp_base": 78, "vib_base": 0.42, "press_base": 5.0, "last_maint": datetime(2025, 7, 20)},
+        ]
+        failure_dates = {
+            "M1 Cutting": [datetime(2025, 7, 30)],
+            "M2 Press":   [datetime(2025, 8, 10)],
+            "M3 Paint":   [datetime(2025, 8, 12)],
+            "M4 Inspect": [datetime(2025, 8, 5)],
+        }
 
     rows = []
     for m in machines:
         last_maint_date = m["last_maint"]
-        future_failures = sorted([d for d in failure_dates[m["name"]] if d >= start_date])
+        fut = failure_dates.get(m["name"], [])
+        future_failures = sorted([d for d in fut if d >= start_date])
         next_failure = future_failures[0] if future_failures else None
 
         for d in dates:
@@ -73,7 +216,7 @@ def make_data(seed: int = 42):
             vib  = float(np.clip(vib, 0.15, 1.5))
             press = float(np.clip(press, 4.5, 6.2))
 
-            actual_failure = int(d in failure_dates[m["name"]])
+            actual_failure = int(d in failure_dates.get(m["name"], []))
 
             if actual_failure:
                 maint_performed = 1
@@ -143,7 +286,15 @@ def next_maintenance_suggestion(risk, today: date):
     return None
 
 # ---- Load base data ----
-df_base = make_data()
+# Use the token source as a cache marker: 'env' vs 'auto' vs 'none'
+if BACKEND_JWT_TOKEN:
+    token_marker = "env"
+elif BACKEND_BASE_URL:
+    token_marker = "auto"
+else:
+    token_marker = "none"
+
+df_base = make_data(42, BACKEND_BASE_URL or None, token_marker)
 df_base["date"] = pd.to_datetime(df_base["date"])
 df_base["risk_level"] = df_base["risk_score"].apply(risk_level)
 
@@ -170,7 +321,6 @@ def apply_simulations(df: pd.DataFrame) -> pd.DataFrame:
                 df.loc[mask, "vibration_g"] = (df.loc[mask, "vibration_g"] + 0.5).clip(upper=1.5)
                 df.loc[mask, "risk_score"] = (df.loc[mask, "risk_score"] + 30).clip(upper=100)
                 df.loc[mask, "failure_expected"] = 1
-        # add more simulation types here as needed
 
     # Recompute predict_fail_within_7d after edits
     df = df.sort_values(["machine_name","date"]).reset_index(drop=True)
@@ -240,7 +390,7 @@ actual_failures_today = focus_df[focus_df["actual_failure"] == 1]["machine_name"
 # Estimated 7-day downtime cost (USD) for machines flagged on focus day
 est_cost = 0.0
 for _, row in focus_df[focus_df["predict_fail_within_7d"] == 1].iterrows():
-    est_cost += DOWNTIME_COST_PER_HOUR[row["machine_name"]] * EXPECTED_HOURS_IF_FAIL
+    est_cost += DOWNTIME_COST_PER_HOUR.get(row["machine_name"], 120.0) * EXPECTED_HOURS_IF_FAIL
 
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("High-Risk Machines (selected day)", hi_risk_machines)
@@ -250,10 +400,10 @@ c4.metric("Est. 7-day Downtime Cost (USD)", f"{est_cost:,.0f}")
 
 with st.expander("ℹ️ How the simulator works"):
     st.write("""
-    • **Inject ACTUAL FAILURE**: marks the chosen machine as failed on the chosen date (risk→95, actual_failure=1).  
-    • **Inject 3-day SPIKE**: raises temperature & vibration for the three days before the chosen date and sets failure_expected=1 → predictions appear.  
-    • Use the slider's **end date** to inspect any day; KPIs/Gauges reflect that day.  
-    • Click **Clear simulations** to reset to original data.
+    • Inject ACTUAL FAILURE: marks the chosen machine as failed on the chosen date (risk→95, actual_failure=1).
+    • Inject 3-day SPIKE: raises temperature & vibration for the three days before the chosen date and sets failure_expected=1 → predictions appear.
+    • Use the slider's end date to inspect any day; KPIs/Gauges reflect that day.
+    • Click Clear simulations to reset to original data.
     """)
 
 st.divider()
@@ -267,7 +417,7 @@ def badge_tuple(r):
 
 st.subheader(f"Machine Status ({focus_date.date()})")
 cols = st.columns(4)
-for i, mname in enumerate(sorted(df["machine_name"].unique().tolist())):
+for i, mname in enumerate(sorted(df["machine_name"].unique().tolist())[:4]):
     sub = focus_df[focus_df["machine_name"] == mname]
     val = float(sub["risk_score"].iloc[0]) if not sub.empty else 0.0
     label, dot = badge_tuple(val)
@@ -280,7 +430,7 @@ st.divider()
 # --- Gauges per machine (selected day) ---
 st.subheader("Risk Gauges (selected day)")
 gcols = st.columns(4)
-for idx, mname in enumerate(sorted(df["machine_name"].unique().tolist())):
+for idx, mname in enumerate(sorted(df["machine_name"].unique().tolist())[:4]):
     sub = focus_df[focus_df["machine_name"] == mname]
     val = float(sub["risk_score"].iloc[0]) if not sub.empty else 0.0
     fig = go.Figure(go.Indicator(
@@ -365,6 +515,4 @@ st.download_button(
 
 st.caption("Pro + Simulator: Inject failures/spikes from the sidebar to see KPIs, gauges, and timelines react immediately.")
 
-#run it with this : streamlit AI_Predictive _aya.py
-
-
+# run it with this : streamlit run ai_Predictive.py
