@@ -177,8 +177,8 @@
       margin-bottom: 20px;
       padding: 16px;
       background: #f0f9ff;
-      border-radius: 8px;
       border-left: 4px solid #0284c7;
+      border-radius: 8px;
     }
     .preset-list {
       max-height: 150px;
@@ -352,6 +352,8 @@
           <div><strong>User:</strong> <span id="currentUsername">-</span></div>
           <div><span id="currentUserRole" class="role-badge">-</span></div>
         </div>
+        <!-- New button to open the Streamlit dashboard in a new tab -->
+        <button id="openPredictiveBtn" class="secondary">📈 AI Predictive Dashboard</button>
         <button id="logoutBtn" class="danger">Logout</button>
       </div>
     </header>
@@ -879,8 +881,8 @@
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${authToken}`
-        },
-        body: JSON.stringify({
+        }
+      , body: JSON.stringify({
           name: name,
           description: `Saved on ${new Date().toLocaleString()}`
         })
@@ -983,6 +985,14 @@
   // Event listeners
   document.addEventListener('DOMContentLoaded', () => {
     checkAuthAndInitialize();
+
+    // Open the Streamlit Predictive dashboard in a new tab (uses current host)
+    document.getElementById('openPredictiveBtn').onclick = () => {
+      const host = window.location.hostname;
+      const proto = window.location.protocol;
+      const url = `${proto}//${host}:8501/`;
+      window.open(url, '_blank');
+    };
 
     // Authentication event handlers
     document.getElementById('loginTab').onclick = () => {
