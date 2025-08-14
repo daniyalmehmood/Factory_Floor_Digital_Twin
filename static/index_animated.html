@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Factory – Animated & Interactive</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root{ --bg:#0b1220; --panel:#0f172a; --stroke:#23314f; --text:#e6eefc; --muted:#9aa6c4; --ok:#16a34a; --bad:#b91c1c; }
+    html, body { height:100%; margin:0; background:var(--bg); color:var(--text); font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial; }
+    header { display:flex; gap:12px; align-items:center; padding:14px; background:var(--panel); border-bottom:1px solid var(--stroke); position:sticky; top:0; z-index:5; }
+    .pill{background:#172036; border:1px solid var(--stroke); padding:6px 10px; border-radius:999px; font-size:12px; color:#c7d2fe;}
+    .muted{color:var(--muted); font-size:12px}
+    a.link { color:#93c5fd; text-decoration:none; }
+    main{ padding:16px; display:grid; gap:16px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+
+    .card{ position:relative; overflow:hidden; border-radius:18px; background:var(--panel); border:1px solid var(--stroke); box-shadow:0 16px 40px rgba(0,0,0,.25); }
+    .card .head{ display:flex; align-items:center; justify-content:space-between; padding:12px 14px; border-bottom:1px solid var(--stroke);}
+    .title{ font-weight:700; letter-spacing:.3px; }
+    .status-dot{ width:10px; height:10px; border-radius:50%; box-shadow:0 0 20px rgba(0,0,0,.35) }
+    .badge{ position:absolute; top:10px; left:10px; background:rgba(0,0,0,.45); border:1px solid var(--stroke); padding:6px 10px; border-radius:999px; font-size:12px;}
+    .svgwrap{ display:grid; place-items:center; padding:16px; height:240px; }
+    .metrics{ display:flex; gap:12px; padding:12px 14px; border-top:1px solid var(--stroke); }
+    .metric{ flex:1; background:#0b1220; border:1px solid var(--stroke); border-radius:12px; padding:10px; text-align:center; }
+    .metric .v{ font-size:22px; font-weight:800; }
+    .dim { opacity:.45; filter:grayscale(.2) }
+    #err { color:#fecaca; background:#450a0a; border:1px solid #7f1d1d; padding:6px 10px; border-radius:8px; display:none; }
+
+    /* --- Per-card interactive controls --- */
+    .actions{ position:absolute; right:10px; top:8px; display:flex; gap:6px; z-index:2; }
+    .act{ border:none; cursor:pointer; font-weight:700; padding:6px 8px; border-radius:10px;
+          background:#172036; color:#c7d2fe; border:1px solid #23314f; }
+    .act:hover{ filter:brightness(1.1); }
+    .act.toggle{ background:#10b981; color:white; }
+    .act.move{ background:#334155; color:#e5e7eb; }
+    .act.boost{ background:#4f46e5; color:white; }
+    .badge.qwarn{ background:#3f1d12; border-color:#7c2d12; }
+    .card.selected{ outline:2px solid #4f46e5; outline-offset:-2px; }
+    .tooltip{ position:absolute; bottom:8px; left:10px; background:#111827; color:#e5e7eb;
+              border:1px solid #23314f; padding:6px 8px; border-radius:10px; font-size:12px; opacity:0.9; }
+    .tooltip.hidden{ display:none; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="pill" id="conn">initializing…</div>
+    <div class="pill">Shifts: <span id="shifts">-</span></div>
+    <div class="pill">Output: <span id="out">0</span></div>
+    <div class="muted">Ambient: <span id="amb">-</span></div>
+    <div class="muted">Time: <span id="time">-</span></div>
+    <div style="flex:1"></div>
+    <span id="err"></span>
+    <a class="link" href="/static/index.html" style="margin-left:12px">↗ Technical</a>&nbsp;&nbsp;|&nbsp;&nbsp;
+    <a class="link" href="/static/index_simple.html">↗ Simplified</a>
+  </header>
+
+  <main id="grid"></main>
+
+<script>
+/* ---------- utils ---------- */
+const grid = document.getElementById('grid');
+const cards = new Map();          // id -> {elements, renderer}
+const latest = new Map();         // id -> last machine snapshot
+const showErr = (msg)=>{ const e=document.getElementById('err'); e.textContent=msg; e.style.display='inline-block'; };
+
+function clamp(n,a,b){ return Math.max(a, Math.min(b, n)); }
+function prettyName(id){
+  return id
+    .replace(/^M1_/,'Machine 1 — ')
+    .replace(/^M2_/,'Machine 2 — ')
+    .replace(/^M3_/,'Machine 3 — ')
+    .replace(/^M4_/,'Machine 4 — ')
+    .replace(/_/g,' ').toUpperCase();
+}
+function typeOf(id){
+  const s = id.toLowerCase();
+  if (s.includes('cutter')) return 'cutter';
+  if (s.includes('press')) return 'press';
+  if (s.includes('paint')) return 'paint';
+  return 'inspect';
+}
+
+/* ---------- tiny SVG helpers ---------- */
+function makeSvg(host, w, h){ const svg = el('svg',{viewBox:`0 0 ${w} ${h}`, width:'100%', height:'100%'}); host.appendChild(svg); return svg; }
+function el(tag, attrs){ const n = document.createElementNS('http://www.w3.org/2000/svg', tag); for(const k in attrs) n.setAttribute(k, attrs[k]); return n; }
+function group(svg, x, y){ const g = el('g',{transform:`translate(${x} ${y})`}); svg.appendChild(g); return g; }
+function rect(svg, x,y,w,h, fill, stroke, op){ const r = el('rect',{x,y,width:w,height:h,rx:10,fill,stroke, 'stroke-width':1, opacity: op??1}); svg.appendChild(r); return r; }
+function circle(svg, x,y, r, fill, stroke){ const c = el('circle',{cx:x, cy:y, r, fill, stroke}); svg.appendChild(c); return c; }
+function line(svg, x1,y1,x2,y2, stroke, sw){ const l = el('line',{x1,y1,x2,y2, stroke, 'stroke-width':sw}); svg.appendChild(l); return l; }
+function triangle(g, innerR, angleDeg, outerR, width, fill){
+  const a = angleDeg * Math.PI/180;
+  const x1 = Math.cos(a) * innerR, y1 = Math.sin(a) * innerR;
+  const x2 = Math.cos(a - width/outerR) * outerR, y2 = Math.sin(a - width/outerR) * outerR;
+  const x3 = Math.cos(a + width/outerR) * outerR, y3 = Math.sin(a + width/outerR) * outerR;
+  const p = el('path',{ d:`M${x1},${y1} L${x2},${y2} L${x3},${y3} Z`, fill });
+  g.appendChild(p); return p;
+}
+
+/* ---------- renderers (SVG + animation) ---------- */
+function renderCutter(host){
+  const svg = makeSvg(host, 220, 160);
+  const g = group(svg, 110, 80);
+  rect(svg, 20, 120, 180, 20, '#0ea5e9', '#1f2937', .35);
+  const blade = circle(g, 0, 0, 42, '#93c5fd', '#1e3a8a');
+  for(let i=0;i<20;i++) triangle(g, 36, i*18, 54, 6, '#60a5fa');
+  let angle = 0;
+  return (m, dt) => {
+    angle += dt * 6 * clamp(m.throughput_factor||1, .2, 2.0);
+    blade.setAttribute('transform', `rotate(${angle})`);
+    const on = m.status !== 'off';
+    blade.setAttribute('fill', on ? '#93c5fd' : '#64748b');
+  };
+}
+
+function renderPress(host){
+  const svg = makeSvg(host, 220, 160);
+  rect(svg, 12, 120, 196, 22, '#0ea5e9', '#1f2937', .3);
+  rect(svg, 20, 18, 180, 20, '#1f2937', '#334155');
+  rect(svg, 50, 30, 120, 90, 'none', '#334155');
+  const ram = rect(svg, 70, 40, 80, 26, '#60a5fa', '#1e3a8a');
+  const die = rect(svg, 70, 96, 80, 14, '#93c5fd', '#1e3a8a');
+  let t = 0;
+  return (m, dt) => {
+    t += dt * clamp(m.throughput_factor||1, .2, 2.0) * 2.2;
+    const y = 40 + Math.abs(Math.sin(t)) * 45;
+    ram.setAttribute('y', y.toFixed(1));
+    const on = m.status !== 'off';
+    ram.setAttribute('fill', on ? '#60a5fa' : '#64748b');
+    die.setAttribute('fill', on ? '#93c5fd' : '#475569');
+  };
+}
+
+function renderPaint(host){
+  const svg = makeSvg(host, 220, 160);
+  rect(svg, 20, 120, 180, 22, '#22c55e', '#1f2937', .25);
+  const gun = rect(svg, 40, 40, 60, 26, '#22c55e', '#065f46');
+  const cloud = group(svg, 120, 70);
+  const dots = [];
+  for (let i=0;i<20;i++){ // أخف أداءً
+    const c = circle(cloud, Math.random()*80, (Math.random()-.5)*18, 1.8, 'rgba(147,197,253,.0)', 'none');
+    dots.push(c);
+  }
+  let acc = 0;
+  return (m, dt) => {
+    const rate = clamp(m.throughput_factor||1, .2, 2.0);
+    acc += dt * (20 * rate);
+    while (acc > 1) {
+      acc -= 1;
+      const d = dots[(Math.random()*dots.length)|0];
+      d.setAttribute('cx', 0);
+      d.setAttribute('cy', (Math.random()-.5)*18);
+      d.dataset.vx = (60 + Math.random()*90) * (0.5 + rate/2);
+      d.dataset.life = 1.0;
+      d.setAttribute('fill', 'rgba(147,197,253,.9)');
+    }
+    dots.forEach(d=>{
+      const life = (d.dataset.life||0)-dt*0.9;
+      if (life<=0){ d.setAttribute('fill','rgba(147,197,253,0)'); d.dataset.life=0; return; }
+      d.dataset.life = life;
+      const x = parseFloat(d.getAttribute('cx')) + (parseFloat(d.dataset.vx)||0)*dt*0.016;
+      d.setAttribute('cx', x);
+      d.setAttribute('fill', `rgba(147,197,253,${life})`);
+    });
+    gun.setAttribute('fill', (m.status!=='off') ? '#22c55e' : '#475569');
+  };
+}
+
+function renderInspect(host){
+  const svg = makeSvg(host, 220, 160);
+  rect(svg, 20, 120, 180, 20, '#0ea5e9', '#1f2937', .25);
+  const pod = rect(svg, 90, 30, 40, 16, '#a78bfa', '#4c1d95');
+  const beam = line(svg, 110, 46, 110, 115, '#22d3ee', 3);
+  let ang = -0.8, dir = 1;
+  return (m, dt) => {
+    const speed = clamp(m.throughput_factor||1, .2, 2.0) * 1.8;
+    ang += dt * 0.8 * speed * dir;
+    if (ang > 0.8){ ang=0.8; dir=-1; }
+    if (ang < -0.8){ ang=-0.8; dir=1; }
+    const x = 110 + Math.sin(ang) * 70;
+    beam.setAttribute('x1', x); beam.setAttribute('x2', x);
+    const on = m.status !== 'off';
+    beam.setAttribute('stroke', on ? '#22d3ee' : '#64748b');
+    pod.setAttribute('fill', on ? '#a78bfa' : '#6b7280');
+  };
+}
+
+/* ---------- interactive helpers ---------- */
+let selectedId = null;
+
+function highlightSelected(){ cards.forEach((el, id) => el.root.classList.toggle('selected', id === selectedId)); }
+
+function debounce(fn, ms){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms); }; }
+const sendThroughputDebounced = debounce((mid, val)=>{ sendAction({ action:'set_throughput', machine_id: mid, value: val }); }, 180);
+
+function bumpThroughput(mid, delta, el, quiet=false){
+  const m = latest.get(mid); if(!m) return;
+  const next = Math.max(0.2, Math.min(2.0, (m.throughput_factor||1) + delta));
+  m.throughput_factor = next; // تحديث بصري فوري
+  el.thr.textContent = next.toFixed(2);
+  if (!quiet) showTip(el, `Thr → ${next.toFixed(2)}`);
+  sendThroughputDebounced(mid, next);
+}
+
+function showTip(el, text){
+  el.tip.textContent = text;
+  el.tip.classList.remove('hidden');
+  clearTimeout(el.tip._t);
+  el.tip._t = setTimeout(()=> el.tip.classList.add('hidden'), 1200);
+}
+
+function sendAction(obj){
+  if (!ws || ws.readyState !== 1){ showErr('Not connected'); return; }
+  ws.send(JSON.stringify(obj));
+}
+
+/* ---------- card creation ---------- */
+function createCard(m){
+  const card = document.createElement('div'); card.className = 'card'; card.id = `card-${m.id}`;
+  card.innerHTML = `
+    <div class="actions">
+      <button class="act move" title="Move left (position -1)">⟵</button>
+      <button class="act move" title="Move right (position +1)">⟶</button>
+      <button class="act boost" title="Increase throughput +0.1">＋</button>
+      <button class="act boost" data-dec="1" title="Decrease throughput -0.1">－</button>
+      <button class="act toggle" title="Toggle on/off">Toggle</button>
+    </div>
+
+    <div class="badge">Queue: <span class="q">0</span></div>
+    <div class="head">
+      <div class="title">${prettyName(m.id)}</div>
+      <div class="status-dot"></div>
+    </div>
+    <div class="svgwrap"></div>
+    <div class="metrics">
+      <div class="metric"><div class="v tot">0</div><div class="k">Processed</div></div>
+      <div class="metric"><div class="v thr">1.0</div><div class="k">Thr. factor</div></div>
+    </div>
+    <div class="tooltip hidden"></div>
+  `;
+  grid.appendChild(card);
+
+  const el = {
+    root: card,
+    badgeQ: card.querySelector('.q'),
+    dot: card.querySelector('.status-dot'),
+    tot: card.querySelector('.tot'),
+    thr: card.querySelector('.thr'),
+    svgwrap: card.querySelector('.svgwrap'),
+    tip: card.querySelector('.tooltip')
+  };
+
+  // رندر حسب نوع الماكينة
+  const key = typeOf(m.id);
+  if(key === 'cutter') el.renderer = renderCutter(el.svgwrap);
+  else if(key === 'press') el.renderer = renderPress(el.svgwrap);
+  else if(key === 'paint') el.renderer = renderPaint(el.svgwrap);
+  else el.renderer = renderInspect(el.svgwrap);
+
+  // اختيار البطاقة
+  el.root.addEventListener('click', ()=>{
+    selectedId = m.id; highlightSelected();
+    showTip(el, 'Selected. Shortcuts: T toggle, +/- throughput, ←/→ move');
+  });
+
+  // أزرار التحكم
+  const [btnLeft, btnRight, btnPlus, btnMinus, btnToggle] = card.querySelectorAll('.actions .act');
+
+  btnLeft.onclick = (e)=>{ e.stopPropagation(); const mm = latest.get(m.id); if(!mm) return;
+    const newPos = Math.max(1, (mm.position||1) - 1);
+    sendAction({ action:'move_equipment', machine_id:m.id, new_position:newPos });
+    showTip(el, `Move → pos ${newPos}`);
+  };
+
+  btnRight.onclick = (e)=>{ e.stopPropagation(); const mm = latest.get(m.id); if(!mm) return;
+    const maxPos = 4; // عدّلي لو زدتِ عدد الماكينات
+    const newPos = Math.min(maxPos, (mm.position||1) + 1);
+    sendAction({ action:'move_equipment', machine_id:m.id, new_position:newPos });
+    showTip(el, `Move → pos ${newPos}`);
+  };
+
+  btnPlus.onclick  = (e)=>{ e.stopPropagation(); bumpThroughput(m.id, +0.1, el); };
+  btnMinus.onclick = (e)=>{ e.stopPropagation(); bumpThroughput(m.id, -0.1, el); };
+
+  btnToggle.onclick = (e)=>{ e.stopPropagation(); sendAction({ action:'toggle_machine', machine_id:m.id }); showTip(el, 'Toggle sent'); };
+
+  // ماوس ويل لرفع/خفض السرعة بسرعة
+  el.root.addEventListener('wheel', (ev)=>{
+    const delta = ev.deltaY > 0 ? -0.05 : +0.05;
+    bumpThroughput(m.id, delta, el, true);
+  }, {passive:true});
+
+  cards.set(m.id, el);
+  return el;
+}
+
+function updateCardStatic(el, m){
+  el.badgeQ.textContent = m.queue ?? 0;
+  el.tot.textContent = m.total_processed ?? 0;
+  el.thr.textContent = (m.throughput_factor ?? 1).toFixed(2);
+  el.dot.style.background = (m.status!=='off') ? 'var(--ok)' : 'var(--bad)';
+  el.root.classList.toggle('dim', m.status==='off');
+}
+
+/* ---------- placeholders: ما يخلي الصفحة سوداء لو WS تأخر ---------- */
+const PLACEHOLDERS = [
+  {id:'M1_cutter', queue:0, throughput_factor:1, status:'on', total_processed:0, position:1},
+  {id:'M2_press',  queue:0, throughput_factor:1, status:'on', total_processed:0, position:2},
+  {id:'M3_paint',  queue:0, throughput_factor:1, status:'on', total_processed:0, position:3},
+  {id:'M4_inspect',queue:0, throughput_factor:1, status:'on', total_processed:0, position:4},
+];
+PLACEHOLDERS.forEach(m=>{ latest.set(m.id,m); const el = createCard(m); updateCardStatic(el, m); });
+
+/* ---------- WebSocket + main loop ---------- */
+let ws;
+let lastTs = performance.now();
+
+function connect(){
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const url = `${proto}://${location.host}/ws`;
+  try{ ws = new WebSocket(url); }
+  catch(e){ document.getElementById('conn').textContent = 'ws error'; showErr('WebSocket init error: '+(e?.message||e)); return; }
+
+  ws.onopen   = ()=> document.getElementById('conn').textContent = 'connected';
+  ws.onerror  = (e)=> { document.getElementById('conn').textContent = 'ws error'; showErr('WebSocket error'); };
+  ws.onclose  = ()=> { document.getElementById('conn').textContent = 'disconnected'; setTimeout(connect, 1500); };
+
+  ws.onmessage = (ev)=>{
+    let msg; try{ msg = JSON.parse(ev.data); }catch(e){ showErr('Bad JSON from server'); return; }
+    if (msg.type !== 'metrics') return;
+    const p = msg.payload;
+    document.getElementById('time').textContent = p.time;
+    document.getElementById('out').textContent  = p.total_output;
+    document.getElementById('amb').textContent  = `${p.ambient_temp}°C, ${p.ambient_humidity}%`;
+    document.getElementById('shifts').textContent = p.staffing_shifts;
+
+    p.machines.forEach(m=>{
+      latest.set(m.id, m);
+      const el = cards.get(m.id) || createCard(m);
+      updateCardStatic(el, m);
+    });
+
+    // ثبت الاختيار أول مرة أو لو تغيّر
+    if (!selectedId && p.machines.length){ selectedId = p.machines[0].id; highlightSelected(); }
+    if (selectedId && !p.machines.find(x=>x.id===selectedId)){ selectedId = p.machines[0]?.id || null; highlightSelected(); }
+  };
+}
+connect();
+
+function tick(now){
+  const dt = (now - lastTs) / 16.67; lastTs = now;
+  latest.forEach((m,id)=>{
+    const el = cards.get(id);
+    if (!el || !el.renderer) return;
+    el.renderer(m, dt);
+  });
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+
+/* ---------- keyboard shortcuts ---------- */
+// بعد تحديد بطاقة (كليك)، T=Toggle, +/-=throughput, ←/→=move
+window.addEventListener('keydown', (e)=>{
+  if (!selectedId) return;
+  const el = cards.get(selectedId); if (!el) return;
+
+  if (e.key === 't' || e.key === 'T'){
+    sendAction({ action:'toggle_machine', machine_id:selectedId });
+    showTip(el, 'Toggle sent'); e.preventDefault();
+  }
+  if (e.key === '+' || e.key === '='){ bumpThroughput(selectedId, +0.05, el); e.preventDefault(); }
+  if (e.key === '-' || e.key === '_'){ bumpThroughput(selectedId, -0.05, el); e.preventDefault(); }
+
+  if (e.key === 'ArrowLeft'){
+    const mm = latest.get(selectedId); if(!mm) return;
+    const newPos = Math.max(1, (mm.position||1) - 1);
+    sendAction({ action:'move_equipment', machine_id:selectedId, new_position:newPos });
+    showTip(el, `Move → pos ${newPos}`); e.preventDefault();
+  }
+  if (e.key === 'ArrowRight'){
+    const mm = latest.get(selectedId); if(!mm) return;
+    const maxPos = 4; // عدّلي لو زدتِ العدد
+    const newPos = Math.min(maxPos, (mm.position||1) + 1);
+    sendAction({ action:'move_equipment', machine_id:selectedId, new_position:newPos });
+    showTip(el, `Move → pos ${newPos}`); e.preventDefault();
+  }
+});
+</script>
+</body>
+</html>
+

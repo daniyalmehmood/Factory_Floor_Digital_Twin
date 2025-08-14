@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Simple Line – Build Stations (EN)</title>
+<style>
+  :root{
+    --bg:#0b1220; --panel:#0f172a; --ink:#e6eefc; --muted:#9aa6c4; --stroke:#23314f;
+    --ok:#16a34a; --bad:#b91c1c; --accent:#4f46e5; --warn:#f59e0b;
+  }
+  html,body{height:100%; margin:0; background:var(--bg); color:var(--ink); font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial}
+  .wrap{display:grid; grid-template-columns: 1fr 320px; min-height:100%}
+  .stage{padding:18px}
+  .panel{background:var(--panel); border-left:1px solid var(--stroke); padding:14px; position:sticky; top:0; height:100vh; overflow:auto}
+  h1{margin:0 0 10px; font-size:20px}
+  .muted{color:var(--muted); font-size:12px}
+  .row{display:flex; gap:8px}
+  select,button{width:100%; padding:10px; border-radius:10px; border:1px solid var(--stroke); background:#0b1220; color:var(--ink)}
+  button{background:var(--accent); border:none; font-weight:700; cursor:pointer}
+  button.secondary{background:#10b981}
+  button.warn{background:#dc2626}
+  .card{
+    position:relative; background:var(--panel); border:1px solid var(--stroke);
+    border-radius:18px; padding:12px; width:260px; height:210px; display:grid; grid-template-rows:auto 1fr auto;
+    box-shadow:0 16px 40px rgba(0,0,0,.25);
+  }
+  .lane{display:flex; gap:16px; align-items:center; justify-content:center; margin-top:10px; flex-wrap:wrap; min-height:260px}
+  .title{font-weight:800; letter-spacing:.4px}
+  .status{width:10px; height:10px; border-radius:50%; box-shadow:0 0 14px rgba(0,0,0,.3)}
+  .svg{display:grid; place-items:center}
+  .metricBar{display:flex; gap:10px}
+  .metric{flex:1; background:#0b1220; border:1px solid var(--stroke); border-radius:12px; text-align:center; padding:6px}
+  .metric .v{font-weight:800}
+  .tip{position:absolute; bottom:8px; right:10px; background:#111827; border:1px solid var(--stroke); border-radius:10px; padding:6px 8px; font-size:12px; display:none}
+  .tip.show{display:block}
+  .arrow{height:6px; width:80px; background:linear-gradient(90deg, transparent, rgba(99,102,241,.5), transparent); position:relative; filter:blur(0.3px)}
+  .arrow::after{content:''; position:absolute; right:-10px; top:-6px; border-left:12px solid #60a5fa; border-top:6px solid transparent; border-bottom:6px solid transparent}
+  .footer{margin-top:18px; padding:12px; background:#0f172a; border:1px solid var(--stroke); border-radius:12px; text-align:center}
+  .pill{display:inline-block; background:#172036; border:1px solid var(--stroke); padding:6px 10px; border-radius:999px; font-size:12px; margin:0 4px}
+  .posLabel{position:absolute; top:-8px; left:8px; font-size:11px; color:#cbd5e1}
+  .slot{position:relative}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <!-- main canvas -->
+  <div class="stage">
+    <div class="row" style="justify-content:space-between;align-items:center">
+      <h1>Simple Line – Build Stations</h1>
+      <div>
+        <span class="pill" id="conn">disconnected</span>
+        <span class="pill">Output: <span id="out">0</span></span>
+        <span class="pill">Shifts: <span id="shifts">-</span></span>
+      </div>
+    </div>
+
+    <!-- positions -->
+    <div class="lane" id="lane">
+      <div class="slot" data-pos="1"><div class="posLabel">pos:1</div></div>
+      <div class="slot" data-pos="2"><div class="posLabel">pos:2</div></div>
+      <div class="slot" data-pos="3"><div class="posLabel">pos:3</div></div>
+      <div class="slot" data-pos="4"><div class="posLabel">pos:4</div></div>
+    </div>
+
+    <!-- flow arrows -->
+    <div class="lane" id="flow"></div>
+
+    <!-- environment -->
+    <div class="footer">
+      <span>Temperature: <b id="temp">-</b> | Humidity: <b id="hum">-</b> | Time: <b id="time">-</b></span>
+    </div>
+  </div>
+
+  <!-- control panel (right) -->
+  <aside class="panel">
+    <div class="muted" style="margin-bottom:10px">Use the controls to build the line step by step.</div>
+
+    <h3>Add Machine (Sequential)</h3>
+    <div class="row">
+      <select id="addSel">
+        <option value="M1_cutter">M1 Cutting</option>
+        <option value="M2_press">M2 Press</option>
+        <option value="M3_paint">M3 Paint</option>
+        <option value="M4_inspect">M4 Inspect</option>
+      </select>
+      <button id="btnAdd">Add</button>
+    </div>
+    <div class="muted">Only allowed to add the next machine in sequence: M1 → M2 → M3 → M4</div>
+
+    <hr style="border:none;border-top:1px solid var(--stroke); margin:14px 0">
+
+    <h3>Remove Machine</h3>
+    <div class="row">
+      <select id="rmSel"></select>
+      <button id="btnRm" class="warn">Remove</button>
+    </div>
+
+    <hr style="border:none;border-top:1px solid var(--stroke); margin:14px 0">
+
+    <h3>Change Machine Position</h3>
+    <div class="row">
+      <select id="mvSel"></select>
+      <select id="posSel">
+        <option value="1">pos:1</option>
+        <option value="2">pos:2</option>
+        <option value="3">pos:3</option>
+        <option value="4">pos:4</option>
+      </select>
+    </div>
+    <button id="btnMove" class="secondary">Move</button>
+
+    <hr style="border:none;border-top:1px solid var(--stroke); margin:14px 0">
+
+    <div class="muted">Tip: Hover any station to see <b>throughput / queue / time</b> and its on/off status.</div>
+  </aside>
+</div>
+
+<script>
+/* ------------------ Data & WebSocket ------------------ */
+const ORDER = ["M1_cutter","M2_press","M3_paint","M4_inspect"];
+const names = {
+  M1_cutter:"M1 — CUTTING", M2_press:"M2 — PRESS", M3_paint:"M3 — PAINT", M4_inspect:"M4 — INSPECT"
+};
+const latest = new Map();    // id -> machine (from backend)
+let ws;
+
+function connect(){
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
+  ws.onopen = ()=> document.getElementById('conn').textContent = 'connected';
+  ws.onclose = ()=> {document.getElementById('conn').textContent = 'disconnected'; setTimeout(connect,1200);}
+  ws.onmessage = (ev)=>{
+    const msg = JSON.parse(ev.data);
+    if (msg.type !== 'metrics') return;
+    const p = msg.payload;
+
+    document.getElementById('time').textContent = p.time;
+    document.getElementById('out').textContent  = p.total_output;
+    document.getElementById('temp').textContent = `${p.ambient_temp}°C`;
+    document.getElementById('hum').textContent  = `${p.ambient_humidity}%`;
+    document.getElementById('shifts').textContent = p.staffing_shifts;
+
+    p.machines.forEach(m=> latest.set(m.id, m));
+    renderAll();
+  };
+}
+connect();
+
+function sendAction(obj){
+  if (!ws || ws.readyState !== 1) return;
+  ws.send(JSON.stringify(obj));
+}
+
+/* ------------------ Stage ------------------ */
+const lane = document.getElementById('lane');
+const flow = document.getElementById('flow');
+const placed = []; // [{id, pos}]
+
+function nextAllowedId(){
+  const idx = placed.length;
+  return ORDER[idx] || null;
+}
+
+function renderAll(){
+  // clear
+  lane.querySelectorAll('.card').forEach(e=>e.remove());
+  flow.innerHTML = '';
+
+  // place cards
+  placed
+    .sort((a,b)=>a.pos-b.pos)
+    .forEach(item => {
+      const slot = lane.querySelector(`.slot[data-pos="${item.pos}"]`);
+      const data = latest.get(item.id) || {status:'on', throughput_factor:1, queue:0, total_processed:0};
+      const card = makeCard(item.id, data);
+      slot.appendChild(card);
+    });
+
+  drawFlow();
+  refreshSelects();
+}
+
+/* Station card */
+function makeCard(id, m){
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.id = `card-${id}`;
+
+  card.innerHTML = `
+    <div class="row" style="justify-content:space-between;align-items:center">
+      <div class="title">${names[id]}</div>
+      <div class="status" style="background:${m.status==='on'?'var(--ok)':'var(--bad)'}"></div>
+    </div>
+    <div class="svg" data-kind="${id}"></div>
+    <div class="metricBar">
+      <div class="metric"><div class="v">${m.total_processed ?? 0}</div><div>Processed</div></div>
+      <div class="metric"><div class="v">${(m.throughput_factor ?? 1).toFixed(2)}</div><div>Thr.</div></div>
+    </div>
+    <div class="tip" id="tip-${id}"></div>
+  `;
+
+  drawIcon(card.querySelector('.svg'), id, m);
+
+  // Tooltip
+  card.addEventListener('mouseenter', ()=>{
+    const t = document.getElementById(`tip-${id}`);
+    const mm = latest.get(id);
+    if (mm){
+      t.textContent = `throughput: ${mm.throughput_factor?.toFixed(2)} | queue: ${mm.queue} | time: ${new Date().toLocaleTimeString()}`;
+    } else {
+      t.textContent = `— no live data —`;
+    }
+    t.classList.add('show');
+  });
+  card.addEventListener('mouseleave', ()=> document.getElementById(`tip-${id}`).classList.remove('show'));
+
+  return card;
+}
+
+/* Icons (SVG) */
+function drawIcon(host, id, m){
+  const k = id.toLowerCase();
+  const svg = mkSvg(host, 240, 120);
+  if (k.includes('cutter')){
+    const g = gEl(svg, 120, 58);
+    C(svg, 40, 95, 160, '#113a5a');
+    const disk = circle(svg, 120, 58, 30, '#93c5fd');
+    for(let i=0;i<18;i++) toothAround(svg, 120, 58, 26, i*20, 38, 6, '#60a5fa');
+    const speed = (m.throughput_factor??1);
+    disk.animate([{transform:`rotate(0deg)`},{transform:`rotate(360deg)`}],{duration: 4000/Math.max(.2,Math.min(2,speed)), iterations:Infinity, transformOrigin:'120px 58px'});
+  }
+  else if (k.includes('press')){
+    C(svg, 30, 20, 180, '#0e2a45');
+    C(svg, 40, 95, 160, '#10324f');
+    const ram = R(svg, 80, 36, 80, 26, '#60a5fa');
+    R(svg, 80, 86, 80, 12, '#93c5fd');
+    const duration = 1200/Math.max(.2,Math.min(2,(m.throughput_factor||1)));
+    ram.animate([{transform:'translateY(0px)'},{transform:'translateY(38px)'},{transform:'translateY(0px)'}],{duration, iterations:Infinity});
+  }
+  else if (k.includes('paint')){
+    C(svg, 40, 95, 160, '#0f3a1e');
+    R(svg, 50, 42, 60, 24, '#22c55e');
+    const dot = circle(svg, 140, 62, 4, '#a5b4fc');
+    dot.animate([{opacity:0, transform:'translateX(0px)'},{opacity:1, transform:'translateX(60px)'},{opacity:0, transform:'translateX(120px)'}],
+                {duration: 1600/Math.max(.2,Math.min(2,(m.throughput_factor||1))), iterations:Infinity});
+  }
+  else{
+    C(svg, 40, 95, 160, '#0f2740');
+    R(svg, 100, 32, 40, 14, '#a78bfa');
+    const beam = L(svg, 120, 46, 120, 95, '#22d3ee', 3);
+    beam.animate([{transform:'translateX(-60px)'},{transform:'translateX(60px)'}],
+                 {duration: 1400/Math.max(.2,Math.min(2,(m.throughput_factor||1))), direction:'alternate', iterations:Infinity});
+  }
+}
+
+function drawFlow(){
+  flow.innerHTML = '';
+  const byPos = placed.slice().sort((a,b)=>a.pos-b.pos).map(x=>x.id);
+  for(let i=0;i<byPos.length-1;i++){
+    const a = byPos[i], b = byPos[i+1];
+    const isSeq = ORDER.indexOf(b) === ORDER.indexOf(a)+1;
+    if (isSeq){
+      const arrow = document.createElement('div');
+      arrow.className = 'arrow';
+      flow.appendChild(arrow);
+    }
+  }
+}
+
+/* Controls */
+const addSel = document.getElementById('addSel');
+const rmSel  = document.getElementById('rmSel');
+const mvSel  = document.getElementById('mvSel');
+const posSel = document.getElementById('posSel');
+
+document.getElementById('btnAdd').onclick = ()=>{
+  const want = addSel.value;
+  const must = nextAllowedId();
+  if (!must){ alert('Line is complete (4 stations).'); return; }
+  if (want !== must){ alert(`You must add ${names[must]} next (sequential).`); return; }
+  const used = placed.map(x=>x.pos);
+  let p = 1; while (used.includes(p)) p++;
+  placed.push({id:want, pos:p});
+  renderAll();
+};
+
+document.getElementById('btnRm').onclick = ()=>{
+  const id = rmSel.value;
+  const idx = placed.findIndex(x=>x.id===id);
+  if (idx>=0){ placed.splice(idx,1); renderAll(); }
+};
+
+document.getElementById('btnMove').onclick = ()=>{
+  const id = mvSel.value;
+  const pos = parseInt(posSel.value,10);
+  if (!id) return;
+  const exists = placed.find(x=>x.id===id);
+  if (!exists){ alert('This machine is not on the stage.'); return; }
+  exists.pos = pos;
+  renderAll();
+  // optional backend sync
+  sendAction({ action:'move_equipment', machine_id:id, new_position: pos });
+};
+
+function refreshSelects(){
+  rmSel.innerHTML = ''; mvSel.innerHTML = '';
+  placed
+    .sort((a,b)=>a.pos-b.pos)
+    .forEach(p=>{
+      rmSel.add(new Option(names[p.id], p.id));
+      mvSel.add(new Option(names[p.id], p.id));
+    });
+}
+
+/* ------- tiny SVG helpers ------- */
+function mkSvg(host,w,h){ const s=document.createElementNS('http://www.w3.org/2000/svg','svg'); s.setAttribute('viewBox',`0 0 ${w} ${h}`); s.setAttribute('width','100%'); s.setAttribute('height','100%'); host.appendChild(s); return s;}
+function R(svg,x,y,w,h,fill){ const r=document.createElementNS(svg.namespaceURI,'rect'); r.setAttribute('x',x); r.setAttribute('y',y); r.setAttribute('width',w); r.setAttribute('height',h); r.setAttribute('rx',10); r.setAttribute('fill',fill); svg.appendChild(r); return r;}
+function C(svg,x,y,w,fill){ return R(svg,x,y,w,12,fill); }
+function circle(svg,cx,cy,r,fill){ const c=document.createElementNS(svg.namespaceURI,'circle'); c.setAttribute('cx',cx); c.setAttribute('cy',cy); c.setAttribute('r',r); c.setAttribute('fill',fill); svg.appendChild(c); return c;}
+function L(svg,x1,y1,x2,y2,stroke,w){ const l=document.createElementNS(svg.namespaceURI,'line'); l.setAttribute('x1',x1); l.setAttribute('y1',y1); l.setAttribute('x2',x2); l.setAttribute('y2',y2); l.setAttribute('stroke',stroke); l.setAttribute('stroke-width',w||2); svg.appendChild(l); return l;}
+function gEl(svg,x,y){ const g=document.createElementNS(svg.namespaceURI,'g'); g.setAttribute('transform',`translate(${x} ${y})`); svg.appendChild(g); return g;}
+function toothAround(svg,cx,cy,innerR,angleDeg,outerR,width,fill){
+  const a = angleDeg * Math.PI/180;
+  const x1 = cx + Math.cos(a) * innerR, y1 = cy + Math.sin(a) * innerR;
+  const x2 = cx + Math.cos(a - width/outerR) * outerR, y2 = cy + Math.sin(a - width/outerR) * outerR;
+  const x3 = cx + Math.cos(a + width/outerR) * outerR, y3 = cy + Math.sin(a + width/outerR) * outerR;
+  const p = document.createElementNS(svg.namespaceURI,'path');
+  p.setAttribute('d',`M${x1},${y1} L${x2},${y2} L${x3},${y3} Z`);
+  p.setAttribute('fill',fill); svg.appendChild(p);
+}
+
+/* boot */
+renderAll();
+</script>
+</body>
+</html>
