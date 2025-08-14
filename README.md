@@ -22,7 +22,7 @@ Before you begin, ensure you have the following installed on your system:
 
 To start the application, navigate to your project's root directory in the terminal and run the following command. The `--reload` flag enables hot-reloading, so the server will automatically restart when you make changes to your code.
 
-```bash
+
 uvicorn backend:app --host 0.0.0.0 --port 8000
 
 ## Docker Support
@@ -36,6 +36,7 @@ requirements.txt – Specifies all Python dependencies required by the applicati
 So, anyone can clone the repository, build the Docker image, and run the application in a fully isolated environment—without having to manually install Python or any dependencies.
 
 ## Run with Docker Compose (Recommended)
+
 1. Build and start the container
 docker-compose up --build
 2. Access the application in your browser
@@ -51,3 +52,8 @@ docker build -t factory-floor-digital-twin .
 docker run -d -p 8000:8000 factory-floor-digital-twin
 3. Access the application
 http://localhost:8000
+
+## Documentation diagrams:
+![Architecture Diagram](Documentation/architecture_diagram.png)
+![Process Flow Diagram](Documentation/process_flow_diagram.png)
+
