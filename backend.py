@@ -3,16 +3,23 @@ import asyncio
 import json
 import random
 import sqlite3
+import uuid
 from datetime import datetime, timedelta
-from typing import Dict, List
+from typing import Dict, List, Any, Optional
 import threading
 import time
 import os
 import re
+import secrets
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException, Header
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException, Header, Depends, status, Query
+from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from pydantic import BaseModel
+import jwt
+from passlib.context import CryptContext
 
 import paho.mqtt.client as mqtt  # for optional external ingestion
 
@@ -20,22 +27,184 @@ import paho.mqtt.client as mqtt  # for optional external ingestion
 # CONFIG
 # -------------------
 DB_PATH = "twin_history.db"
-API_KEY = os.environ.get("FACTORY_API_KEY", "secret123")  # simple API key for protected actions
-MQTT_ENABLED = False  # set True to enable external MQTT ingest
+API_KEY = os.environ.get("FACTORY_API_KEY", "secret123")
+MQTT_ENABLED = False
 MQTT_BROKER = os.environ.get("MQTT_BROKER", "broker.hivemq.com")
 MQTT_PORT = int(os.environ.get("MQTT_PORT", 1883))
 MQTT_TOPIC = os.environ.get("MQTT_TOPIC", "/factory/digitaltwin/sensors")
 TICK_SECONDS = 2.0
 SECONDS_PER_MIN = 60.0
 
+# JWT Configuration
+JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY", secrets.token_urlsafe(32))
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRATION_HOURS = 24
+
 app = FastAPI()
+
+# Allow local testing from file:// or localhost dev server
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Mount static files - this is important for serving your index.html
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
+# Password hashing
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+# HTTP Bearer for token authentication
+security = HTTPBearer(auto_error=False)
+
+# -----------------------
+# PYDANTIC MODELS
+# -----------------------
+class MachineIn(BaseModel):
+    name: str
+    base_rate: float = 50.0
+    position: int = 1
+
+class PresetIn(BaseModel):
+    name: str
+    description: str = ""
+
+class UserCreate(BaseModel):
+    username: str
+    password: str
+    role: str = "viewer"  # Default to viewer role
+
+class UserLogin(BaseModel):
+    username: str
+    password: str
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+    user: dict
+
 # -------------------
-# DATABASE (SQLite) - with migration support
+# AUTHENTICATION HELPERS
+# -------------------
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """Verify a password against its hash"""
+    return pwd_context.verify(plain_password, hashed_password)
+
+def get_password_hash(password: str) -> str:
+    """Hash a password"""
+    return pwd_context.hash(password)
+
+def create_access_token(data: dict) -> str:
+    """Create a JWT access token"""
+    to_encode = data.copy()
+    expire = datetime.utcnow() + timedelta(hours=JWT_EXPIRATION_HOURS)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
+    return encoded_jwt
+
+def verify_token(token: str) -> Optional[dict]:
+    """Verify and decode a JWT token"""
+    try:
+        payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
+        return payload
+    except jwt.PyJWTError:
+        return None
+
+def get_user_by_username(username: str) -> Optional[dict]:
+    """Get user by username from database"""
+    with db_lock:
+        cur = db_conn.cursor()
+        cur.execute("SELECT id, username, password_hash, role, created_at, last_login FROM users WHERE username = ?", (username,))
+        row = cur.fetchone()
+        if row:
+            return {
+                "id": row[0],
+                "username": row[1],
+                "password_hash": row[2],
+                "role": row[3],
+                "created_at": row[4],
+                "last_login": row[5]
+            }
+    return None
+
+def get_user_by_id(user_id: int) -> Optional[dict]:
+    """Get user by ID from database"""
+    with db_lock:
+        cur = db_conn.cursor()
+        cur.execute("SELECT id, username, password_hash, role, created_at, last_login FROM users WHERE id = ?", (user_id,))
+        row = cur.fetchone()
+        if row:
+            return {
+                "id": row[0],
+                "username": row[1],
+                "password_hash": row[2],
+                "role": row[3],
+                "created_at": row[4],
+                "last_login": row[5]
+            }
+    return None
+
+def update_last_login(user_id: int):
+    """Update user's last login timestamp"""
+    with db_lock:
+        cur = db_conn.cursor()
+        now = datetime.utcnow().isoformat() + "Z"
+        cur.execute("UPDATE users SET last_login = ? WHERE id = ?", (now, user_id))
+        db_conn.commit()
+
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
+    """Get current authenticated user"""
+    if not credentials:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+        
+    token = credentials.credentials
+    payload = verify_token(token)
+    
+    if payload is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    user_id = payload.get("sub")
+    if user_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    user = get_user_by_id(int(user_id))
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    return user
+
+def require_admin(current_user: dict = Depends(get_current_user)) -> dict:
+    """Require admin role"""
+    if current_user["role"] != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required"
+        )
+    return current_user
+
+# -------------------
+# DATABASE (SQLite)
 # -------------------
 def get_db_version(conn):
-    """Get current database schema version"""
     try:
         cursor = conn.cursor()
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'")
@@ -48,7 +217,6 @@ def get_db_version(conn):
         return 0
 
 def set_db_version(conn, version):
-    """Set database schema version"""
     cursor = conn.cursor()
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS schema_version (
@@ -62,25 +230,20 @@ def set_db_version(conn, version):
     conn.commit()
 
 def check_column_exists(conn, table_name, column_name):
-    """Check if a column exists in a table"""
     cursor = conn.cursor()
     cursor.execute(f"PRAGMA table_info({table_name})")
     columns = [row[1] for row in cursor.fetchall()]
     return column_name in columns
 
 def migrate_database(conn):
-    """Handle database migrations"""
     current_version = get_db_version(conn)
     cursor = conn.cursor()
     
-    # Migration to version 1: Add description and created_at columns to presets
     if current_version < 1:
         print("Migrating database to version 1...")
         try:
-            # Check if presets table exists
             cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='presets'")
             if cursor.fetchone():
-                # Add missing columns if they don't exist
                 if not check_column_exists(conn, 'presets', 'description'):
                     cursor.execute("ALTER TABLE presets ADD COLUMN description TEXT")
                     print("Added 'description' column to presets table")
@@ -89,7 +252,6 @@ def migrate_database(conn):
                     cursor.execute("ALTER TABLE presets ADD COLUMN created_at TEXT")
                     print("Added 'created_at' column to presets table")
                     
-                    # Set default created_at for existing records
                     default_date = datetime.utcnow().isoformat() + "Z"
                     cursor.execute("UPDATE presets SET created_at = ? WHERE created_at IS NULL", (default_date,))
                     print("Set default created_at for existing presets")
@@ -100,16 +262,46 @@ def migrate_database(conn):
         except Exception as e:
             print(f"Migration to version 1 failed: {e}")
             conn.rollback()
-    
-    # Future migrations can be added here
-    # if current_version < 2:
-    #     # Migration logic for version 2
+
+    # Migration to version 2: Add users table
+    if current_version < 2:
+        print("Migrating database to version 2...")
+        try:
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'viewer',
+                created_at TEXT NOT NULL,
+                last_login TEXT
+            );
+            """)
+            
+            # Create default admin user if no users exist
+            cursor.execute("SELECT COUNT(*) FROM users")
+            user_count = cursor.fetchone()[0]
+            
+            if user_count == 0:
+                admin_password_hash = get_password_hash("admin123")  # Default admin password
+                created_at = datetime.utcnow().isoformat() + "Z"
+                cursor.execute("""
+                INSERT INTO users (username, password_hash, role, created_at) 
+                VALUES (?, ?, ?, ?)
+                """, ("admin", admin_password_hash, "admin", created_at))
+                print("Created default admin user (username: admin, password: admin123)")
+            
+            conn.commit()
+            set_db_version(conn, 2)
+            print("Database migration to version 2 completed")
+        except Exception as e:
+            print(f"Migration to version 2 failed: {e}")
+            conn.rollback()
 
 def init_db():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     c = conn.cursor()
     
-    # Create metrics table
     c.execute("""
     CREATE TABLE IF NOT EXISTS metrics (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -118,7 +310,6 @@ def init_db():
     );
     """)
     
-    # Create presets table with all columns
     c.execute("""
     CREATE TABLE IF NOT EXISTS presets (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -129,18 +320,26 @@ def init_db():
     );
     """)
     
+    # Create users table
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT NOT NULL UNIQUE,
+        password_hash TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'viewer',
+        created_at TEXT NOT NULL,
+        last_login TEXT
+    );
+    """)
+    
     conn.commit()
-    
-    # Run migrations
     migrate_database(conn)
-    
     return conn
 
 db_conn = init_db()
 db_lock = threading.Lock()
 
 def save_metrics_snapshot(snapshot: dict):
-    """Save snapshot (dict) into SQLite DB as JSON."""
     try:
         with db_lock:
             cur = db_conn.cursor()
@@ -150,7 +349,6 @@ def save_metrics_snapshot(snapshot: dict):
         print("DB save error:", e)
 
 def query_history(minutes: int = 60):
-    """Return raw metric snapshots for last N minutes."""
     cutoff = datetime.utcnow() - timedelta(minutes=minutes)
     cutoff_iso = cutoff.isoformat() + "Z"
     with db_lock:
@@ -165,12 +363,13 @@ def query_history(minutes: int = 60):
             pass
     return results
 
-# -------------------
-# Digital Twin model (same core idea as earlier)
-# -------------------
+# -----------------------
+# DIGITAL TWIN MODEL
+# -----------------------
 class Machine:
-    def __init__(self, id, base_rate, position):
+    def __init__(self, id: str, name: str, base_rate: float, position: int):
         self.id = id
+        self.name = name
         self.base_rate = base_rate
         self.throughput_factor = 1.0
         self.uptime = 1.0
@@ -178,10 +377,12 @@ class Machine:
         self.position = position
         self.status = "on"
         self.total_processed = 0.0
+        self.last_change = datetime.utcnow().isoformat() + "Z"
 
     def to_dict(self):
         return {
             "id": self.id,
+            "name": self.name,
             "base_rate": self.base_rate,
             "throughput_factor": round(self.throughput_factor, 3),
             "uptime": round(self.uptime, 3),
@@ -189,10 +390,11 @@ class Machine:
             "position": self.position,
             "status": self.status,
             "total_processed": int(self.total_processed),
+            "last_change": self.last_change
         }
 
     def from_dict(self, data: dict):
-        """Restore machine state from saved data"""
+        self.name = data.get("name", self.name)
         self.base_rate = float(data.get("base_rate", self.base_rate))
         self.throughput_factor = float(data.get("throughput_factor", 1.0))
         self.uptime = float(data.get("uptime", 1.0))
@@ -200,18 +402,24 @@ class Machine:
         self.position = int(data.get("position", self.position))
         self.status = data.get("status", "on")
         self.total_processed = float(data.get("total_processed", 0.0))
+        self.last_change = data.get("last_change", datetime.utcnow().isoformat() + "Z")
 
 # Initial default machines
 DEFAULT_MACHINES = [
-    {"id": "M1_cutter", "base_rate": 60, "position": 1},
-    {"id": "M2_press", "base_rate": 50, "position": 2},
-    {"id": "M3_paint", "base_rate": 40, "position": 3},
-    {"id": "M4_inspect", "base_rate": 70, "position": 4},
+    {"id": "M1_cutter", "name": "Cutting Station", "base_rate": 60, "position": 1},
+    {"id": "M2_press", "name": "Press Station", "base_rate": 50, "position": 2},
+    {"id": "M3_paint", "name": "Paint Station", "base_rate": 40, "position": 3},
+    {"id": "M4_inspect", "name": "Inspection Station", "base_rate": 70, "position": 4},
 ]
 
-machines: List[Machine] = [
-    Machine(m["id"], m["base_rate"], m["position"]) for m in DEFAULT_MACHINES
-]
+machines: Dict[str, Machine] = {}
+machines_lock = asyncio.Lock()
+
+def initialize_default_machines():
+    for m in DEFAULT_MACHINES:
+        machines[m["id"]] = Machine(m["id"], m["name"], m["base_rate"], m["position"])
+
+initialize_default_machines()
 
 # Initial twin state
 INITIAL_TWIN_STATE = {
@@ -228,7 +436,6 @@ twin_state["time"] = datetime.utcnow().isoformat() + "Z"
 # Helper functions
 # -------------------
 def validate_preset_name(name: str) -> str:
-    """Validate and sanitize preset name"""
     if not name or not name.strip():
         raise ValueError("Preset name cannot be empty")
     
@@ -242,40 +449,34 @@ def validate_preset_name(name: str) -> str:
     return name
 
 def reset_simulation():
-    """Reset simulation to initial state"""
-    global machines, twin_state
-    
-    # Reset machines to defaults
+    global twin_state
     machines.clear()
-    machines.extend([Machine(m["id"], m["base_rate"], m["position"]) for m in DEFAULT_MACHINES])
-    
-    # Reset twin state
+    initialize_default_machines()
     twin_state.clear()
     twin_state.update(INITIAL_TWIN_STATE.copy())
     twin_state["time"] = datetime.utcnow().isoformat() + "Z"
 
 def normalize_machine_positions():
     """Ensure machine positions are sequential starting from 1"""
-    sorted_machines = sorted(machines, key=lambda x: x.position)
+    sorted_machines = sorted(machines.values(), key=lambda x: x.position)
     for idx, machine in enumerate(sorted_machines, start=1):
         machine.position = idx
 
-# -------------------
-# Helper simulation logic (unchanged)
-# -------------------
 def compute_staffing_modifier(shifts: int) -> float:
     return 1.0 + 0.25 * (shifts - 1)
+
+def machines_snapshot():
+    return [m.to_dict() for m in sorted(machines.values(), key=lambda x: x.position)]
 
 def process_production_tick(delta_seconds: float):
     staffing_mod = compute_staffing_modifier(twin_state["staffing_shifts"])
 
-    # ambient drift
     twin_state["ambient_temp"] += random.uniform(-0.05, 0.05)
     twin_state["ambient_humidity"] += random.uniform(-0.1, 0.1)
     twin_state["ambient_temp"] = round(max(15, min(40, twin_state["ambient_temp"])), 2)
     twin_state["ambient_humidity"] = round(max(20, min(80, twin_state["ambient_humidity"])), 2)
 
-    machines_sorted = sorted(machines, key=lambda m: m.position)
+    machines_sorted = sorted(machines.values(), key=lambda m: m.position)
     new_output = 0.0
 
     for i, m in enumerate(machines_sorted):
@@ -311,27 +512,34 @@ def process_production_tick(delta_seconds: float):
     twin_state["time"] = datetime.utcnow().isoformat() + "Z"
 
 # -------------------
-# WebSocket manager for dashboards (unchanged)
+# WebSocket manager
 # -------------------
 class ConnectionManager:
     def __init__(self):
-        self.active: List[WebSocket] = []
+        self.active: List[Dict[str, any]] = []
 
-    async def connect(self, websocket: WebSocket):
+    async def connect(self, websocket: WebSocket, user: Optional[dict] = None):
         await websocket.accept()
-        self.active.append(websocket)
+        connection_info = {
+            "websocket": websocket,
+            "user": user,
+            "connected_at": datetime.utcnow()
+        }
+        self.active.append(connection_info)
 
     def disconnect(self, websocket: WebSocket):
-        if websocket in self.active:
-            self.active.remove(websocket)
+        self.active = [conn for conn in self.active if conn["websocket"] != websocket]
 
     async def broadcast(self, message: Dict):
-        data = json.dumps(message)
+        data = json.dumps(message) if isinstance(message, dict) else message
         living = []
-        for ws in list(self.active):
+        for conn_info in list(self.active):
             try:
-                await ws.send_text(data)
-                living.append(ws)
+                if isinstance(data, str):
+                    await conn_info["websocket"].send_text(data)
+                else:
+                    await conn_info["websocket"].send_json(data)
+                living.append(conn_info)
             except Exception:
                 pass
         self.active = living
@@ -339,110 +547,332 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 # -------------------
-# Simulator loop (unchanged)
+# AUTHENTICATION ENDPOINTS
 # -------------------
-async def simulator_loop():
-    while True:
-        process_production_tick(TICK_SECONDS)
-        machines_snapshot = [m.to_dict() for m in sorted(machines, key=lambda x: x.position)]
-        bottlenecks = [m["id"] for m in machines_snapshot if m["queue"] > max(2.0, 0.5 * (m["base_rate"]/SECONDS_PER_MIN) * TICK_SECONDS)]
-        metrics = {
+@app.post("/api/register")
+async def register(user_data: UserCreate):
+    """Register a new user"""
+    # Validate username
+    if not user_data.username or len(user_data.username.strip()) < 3:
+        raise HTTPException(status_code=400, detail="Username must be at least 3 characters long")
+    
+    if not re.match(r'^[a-zA-Z0-9_-]+$', user_data.username):
+        raise HTTPException(status_code=400, detail="Username can only contain letters, numbers, hyphens, and underscores")
+    
+    # Validate password
+    if len(user_data.password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters long")
+    
+    # Validate role
+    if user_data.role not in ["admin", "viewer"]:
+        raise HTTPException(status_code=400, detail="Role must be either 'admin' or 'viewer'")
+    
+    # Check if user already exists
+    existing_user = get_user_by_username(user_data.username)
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Username already registered")
+    
+    # Hash password and create user
+    try:
+        password_hash = get_password_hash(user_data.password)
+        created_at = datetime.utcnow().isoformat() + "Z"
+        
+        with db_lock:
+            cur = db_conn.cursor()
+            cur.execute("""
+            INSERT INTO users (username, password_hash, role, created_at) 
+            VALUES (?, ?, ?, ?)
+            """, (user_data.username, password_hash, user_data.role, created_at))
+            db_conn.commit()
+            user_id = cur.lastrowid
+        
+        return {"message": "User registered successfully", "user_id": user_id}
+    except Exception as e:
+        print(f"Registration error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to register user")
+
+@app.post("/api/token")
+async def login(user_credentials: UserLogin):
+    """Authenticate user and return JWT token"""
+    user = get_user_by_username(user_credentials.username)
+    
+    if not user or not verify_password(user_credentials.password, user["password_hash"]):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    # Update last login
+    update_last_login(user["id"])
+    
+    # Create access token
+    access_token = create_access_token(data={"sub": str(user["id"])})
+    
+    # Return token and user info
+    user_info = {
+        "id": user["id"],
+        "username": user["username"],
+        "role": user["role"]
+    }
+    
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user": user_info
+    }
+
+@app.get("/api/me")
+async def get_me(current_user: dict = Depends(get_current_user)):
+    """Get current user information"""
+    return {
+        "id": current_user["id"],
+        "username": current_user["username"],
+        "role": current_user["role"],
+        "created_at": current_user["created_at"],
+        "last_login": current_user["last_login"]
+    }
+
+# -----------------------
+# REST API ENDPOINTS (now with authentication)
+# -----------------------
+@app.get('/api/machines')
+async def list_machines(current_user: dict = Depends(get_current_user)):
+    return machines_snapshot()
+
+@app.post('/api/machines', status_code=201)
+async def create_machine(payload: MachineIn, current_user: dict = Depends(require_admin)):
+    async with machines_lock:
+        mid = str(uuid.uuid4())
+        m = Machine(mid, payload.name, payload.base_rate, payload.position)
+        machines[mid] = m
+    
+    normalize_machine_positions()
+    await manager.broadcast({'type': 'machines_updated', 'machines': machines_snapshot()})
+    return m.to_dict()
+
+@app.put('/api/machines/{machine_id}')
+async def update_machine(machine_id: str, payload: MachineIn, current_user: dict = Depends(require_admin)):
+    async with machines_lock:
+        if machine_id not in machines:
+            raise HTTPException(status_code=404, detail='Machine not found')
+        
+        m = machines[machine_id]
+        m.name = payload.name
+        m.base_rate = payload.base_rate
+        m.position = payload.position
+        m.last_change = datetime.utcnow().isoformat() + "Z"
+    
+    normalize_machine_positions()
+    await manager.broadcast({'type': 'machines_updated', 'machines': machines_snapshot()})
+    return m.to_dict()
+
+@app.delete('/api/machines/{machine_id}')
+async def delete_machine(machine_id: str, current_user: dict = Depends(require_admin)):
+    async with machines_lock:
+        if machine_id not in machines:
+            raise HTTPException(status_code=404, detail='Machine not found')
+
+        m = machines.pop(machine_id)
+        m.queue = 0.0
+
+    normalize_machine_positions()
+    await manager.broadcast({'type': 'machines_updated', 'machines': machines_snapshot()})
+    return {'status': 'deleted', 'id': machine_id}
+
+# -----------------------
+# PRESET ENDPOINTS (now with authentication)
+# -----------------------
+@app.get('/api/presets')
+async def list_presets(current_user: dict = Depends(get_current_user)):
+    with db_lock:
+        cur = db_conn.cursor()
+        cur.execute("SELECT id, name, description, created_at FROM presets ORDER BY created_at DESC")
+        rows = cur.fetchall()
+    
+    presets = []
+    for row in rows:
+        presets.append({
+            "id": row[0],
+            "name": row[1],
+            "description": row[2] or "",
+            "created_at": row[3]
+        })
+    return presets
+
+@app.post('/api/presets', status_code=201)
+async def create_preset(payload: PresetIn, current_user: dict = Depends(require_admin)):
+    try:
+        name = validate_preset_name(payload.name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    
+    config = {
+        "twin_state": twin_state,
+        "machines": machines_snapshot()
+    }
+    
+    try:
+        with db_lock:
+            cur = db_conn.cursor()
+            cur.execute(
+                "INSERT INTO presets (name, description, config, created_at) VALUES (?, ?, ?, ?)",
+                (name, payload.description, json.dumps(config), datetime.utcnow().isoformat() + "Z")
+            )
+            db_conn.commit()
+            preset_id = cur.lastrowid
+    except sqlite3.IntegrityError:
+        raise HTTPException(status_code=400, detail="Preset name already exists")
+    
+    return {
+        "id": preset_id,
+        "name": name,
+        "description": payload.description,
+        "created_at": datetime.utcnow().isoformat() + "Z"
+    }
+
+@app.post('/api/presets/{preset_id}/load')
+async def load_preset(preset_id: int, current_user: dict = Depends(require_admin)):
+    with db_lock:
+        cur = db_conn.cursor()
+        cur.execute("SELECT name, config FROM presets WHERE id = ?", (preset_id,))
+        row = cur.fetchone()
+    
+    if not row:
+        raise HTTPException(status_code=404, detail="Preset not found")
+    
+    try:
+        config = json.loads(row[1])
+        
+        # Load machines
+        if "machines" in config:
+            machines.clear()
+            for m_data in config["machines"]:
+                machine = Machine(
+                    m_data["id"],
+                    m_data.get("name", m_data["id"]),
+                    float(m_data.get("base_rate", 50)),
+                    int(m_data.get("position", 1))
+                )
+                machine.from_dict(m_data)
+                machines[machine.id] = machine
+            
+            normalize_machine_positions()
+        
+        # Load twin state
+        if "twin_state" in config:
+            ts = config["twin_state"]
+            twin_state["staffing_shifts"] = int(ts.get("staffing_shifts", 1))
+            twin_state["ambient_temp"] = float(ts.get("ambient_temp", 25.0))
+            twin_state["ambient_humidity"] = float(ts.get("ambient_humidity", 45.0))
+        
+        # Broadcast update
+        current_payload = {
             "time": twin_state["time"],
             "ambient_temp": twin_state["ambient_temp"],
             "ambient_humidity": twin_state["ambient_humidity"],
             "total_output": twin_state["total_output"],
-            "machines": machines_snapshot,
-            "bottlenecks": bottlenecks,
+            "machines": machines_snapshot(),
+            "bottlenecks": [],
             "staffing_shifts": twin_state["staffing_shifts"],
         }
-        # broadcast
-        await manager.broadcast({"type": "metrics", "payload": metrics})
-        # persist
-        save_metrics_snapshot(metrics)
+        await manager.broadcast({"type": "metrics", "payload": current_payload})
+        
+        return {"message": f"Loaded preset: {row[0]}"}
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error loading preset: {str(e)}")
+
+@app.delete('/api/presets/{preset_id}')
+async def delete_preset(preset_id: int, current_user: dict = Depends(require_admin)):
+    with db_lock:
+        cur = db_conn.cursor()
+        cur.execute("DELETE FROM presets WHERE id = ?", (preset_id,))
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Preset not found")
+        db_conn.commit()
+    
+    return {"message": "Preset deleted"}
+
+# -----------------------
+# BACKGROUND TASK
+# -----------------------
+async def simulator_loop():
+    while True:
+        try:
+            if machines:
+                process_production_tick(TICK_SECONDS)
+                
+                machines_snapshot_data = machines_snapshot()
+                bottlenecks = [m["id"] for m in machines_snapshot_data if m["queue"] > max(2.0, 0.5 * (m["base_rate"]/SECONDS_PER_MIN) * TICK_SECONDS)]
+                
+                metrics = {
+                    "time": twin_state["time"],
+                    "ambient_temp": twin_state["ambient_temp"],
+                    "ambient_humidity": twin_state["ambient_humidity"],
+                    "total_output": twin_state["total_output"],
+                    "machines": machines_snapshot_data,
+                    "bottlenecks": bottlenecks,
+                    "staffing_shifts": twin_state["staffing_shifts"],
+                }
+                
+                await manager.broadcast({"type": "metrics", "payload": metrics})
+                save_metrics_snapshot(metrics)
+        except Exception as e:
+            print(f"Simulator loop error: {e}")
+        
         await asyncio.sleep(TICK_SECONDS)
 
 @app.on_event("startup")
 async def startup_event():
-    # start simulation background task
-    loop = asyncio.get_event_loop()
-    loop.create_task(simulator_loop())
+    asyncio.create_task(simulator_loop())
 
-    # start optional MQTT ingest in a separate thread so it doesn't block uvicorn
-    if MQTT_ENABLED:
-        t = threading.Thread(target=start_mqtt_client, daemon=True)
-        t.start()
-
-# -------------------
-# MQTT ingestion (unchanged)
-# -------------------
-def on_mqtt_connect(client, userdata, flags, rc):
-    print("MQTT connected:", rc)
-    client.subscribe(MQTT_TOPIC)
-
-def on_mqtt_message(client, userdata, msg):
-    try:
-        payload = json.loads(msg.payload.decode())
-    except:
-        return
-    # Simple mapping: if payload has sensor_id, value, type -> apply
-    sid = payload.get("sensor_id")
-    mtype = payload.get("type")
-    val = payload.get("value")
-    if sid and mtype:
-        # find machine
-        for m in machines:
-            if m.id == sid:
-                if mtype == "queue_increase":
-                    m.queue += float(val or 0)
-                elif mtype == "throughput_factor":
-                    m.throughput_factor = float(val or m.throughput_factor)
-                elif mtype == "toggle":
-                    m.status = "off" if m.status == "on" else "on"
-                # broadcast an immediate update
-                snapshot = {
-                    "time": datetime.utcnow().isoformat() + "Z",
-                    "ambient_temp": twin_state["ambient_temp"],
-                    "ambient_humidity": twin_state["ambient_humidity"],
-                    "total_output": twin_state["total_output"],
-                    "machines": [x.to_dict() for x in sorted(machines, key=lambda z: z.position)],
-                    "bottlenecks": [x.id for x in machines if x.queue > 5],
-                    "staffing_shifts": twin_state["staffing_shifts"],
-                }
-                # schedule broadcast on event loop
-                try:
-                    loop = asyncio.get_event_loop()
-                    loop.call_soon_threadsafe(asyncio.create_task, manager.broadcast({"type": "metrics", "payload": snapshot}))
-                except Exception:
-                    pass
-                break
-
-def start_mqtt_client():
-    client = mqtt.Client()
-    client.on_connect = on_mqtt_connect
-    client.on_message = on_mqtt_message
-    try:
-        client.connect(MQTT_BROKER, MQTT_PORT, 60)
-        client.loop_forever()
-    except Exception as e:
-        print("MQTT error:", e)
-
-# -------------------
-# WebSocket endpoint (unchanged from your fixed version)
-# -------------------
+# -----------------------
+# WEBSOCKET ENDPOINT - Enhanced with authentication
+# -----------------------
 @app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    await manager.connect(websocket)
+async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(None)):
+    # Try to authenticate user if token is provided
+    user = None
+    if token:
+        payload = verify_token(token)
+        if payload:
+            user_id = payload.get("sub")
+            if user_id:
+                user = get_user_by_id(int(user_id))
+    
+    await manager.connect(websocket, user)
     try:
-        # send initial snapshot
-        await websocket.send_text(json.dumps({"type": "metrics", "payload": {
+        initial_payload = {
             "time": twin_state["time"],
             "ambient_temp": twin_state["ambient_temp"],
             "ambient_humidity": twin_state["ambient_humidity"],
             "total_output": twin_state["total_output"],
-            "machines": [m.to_dict() for m in sorted(machines, key=lambda x: x.position)],
+            "machines": machines_snapshot(),
             "bottlenecks": [],
             "staffing_shifts": twin_state["staffing_shifts"],
-        }}))
+        }
+        await websocket.send_text(json.dumps({"type": "metrics", "payload": initial_payload}))
+        
+        # Send authentication status
+        if user:
+            await websocket.send_text(json.dumps({
+                "type": "auth_status", 
+                "payload": {
+                    "authenticated": True,
+                    "user": {
+                        "id": user["id"],
+                        "username": user["username"],
+                        "role": user["role"]
+                    }
+                }
+            }))
+        else:
+            await websocket.send_text(json.dumps({
+                "type": "auth_status", 
+                "payload": {"authenticated": False}
+            }))
+        
         while True:
             msg = await websocket.receive_text()
             try:
@@ -451,118 +881,105 @@ async def websocket_endpoint(websocket: WebSocket):
                 await websocket.send_text(json.dumps({"type":"error","payload":"invalid json"}))
                 continue
 
-            # Expect commands to include optional "api_key" for protected actions
             action = obj.get("action")
-            key = obj.get("api_key") or ""
-            # Unprotected actions: request snapshot
+            
+            # Unprotected actions
             if action == "get_snapshot":
                 snapshot = {
                     "time": twin_state["time"],
                     "ambient_temp": twin_state["ambient_temp"],
                     "ambient_humidity": twin_state["ambient_humidity"],
                     "total_output": twin_state["total_output"],
-                    "machines": [m.to_dict() for m in sorted(machines, key=lambda x: x.position)],
-                    "bottlenecks": [m.id for m in machines if m.queue > 5],
+                    "machines": machines_snapshot(),
+                    "bottlenecks": [m_id for m_id, m in machines.items() if m.queue > 5],
                     "staffing_shifts": twin_state["staffing_shifts"],
                 }
                 await websocket.send_text(json.dumps({"type":"metrics","payload": snapshot}))
                 continue
-
-            # Protected commands require API_KEY
-            if key != API_KEY:
-                await websocket.send_text(json.dumps({"type":"error","payload":"missing or invalid api_key"}))
+            elif action == "ping":
+                await websocket.send_json({'type': 'pong'})
                 continue
 
-            # handle protected action commands
+            # All other commands require authentication and admin role
+            if not user:
+                await websocket.send_text(json.dumps({"type":"error","payload":"authentication required"}))
+                continue
+            
+            if user["role"] != "admin":
+                await websocket.send_text(json.dumps({"type":"error","payload":"admin access required"}))
+                continue
+
+            # Handle admin commands
             if action == "add_shift":
                 twin_state["staffing_shifts"] = min(3, twin_state["staffing_shifts"] + 1)
             elif action == "remove_shift":
                 twin_state["staffing_shifts"] = max(1, twin_state["staffing_shifts"] - 1)
             elif action == "move_equipment":
-                mid = obj.get("machine_id"); new_pos = int(obj.get("new_position", 1))
-                for m in machines:
-                    if m.id == mid:
-                        m.position = new_pos
-                        break
-                normalize_machine_positions()
+                mid = obj.get("machine_id")
+                new_pos = obj.get("new_position")
+                if mid in machines:
+                    machines[mid].position = int(new_pos)
+                    machines[mid].last_change = datetime.utcnow().isoformat() + "Z"
+                    normalize_machine_positions()
             elif action == "toggle_machine":
                 mid = obj.get("machine_id")
-                for m in machines:
-                    if m.id == mid:
-                        m.status = "off" if m.status == "on" else "on"
-                        break
+                if mid in machines:
+                    m = machines[mid]
+                    m.status = "off" if m.status == "on" else "on"
+                    m.last_change = datetime.utcnow().isoformat() + "Z"
             elif action == "set_throughput":
-                mid = obj.get("machine_id"); val = float(obj.get("value", 1.0))
-                for m in machines:
-                    if m.id == mid:
-                        m.throughput_factor = max(0.2, min(2.0, val))
-                        break
+                mid = obj.get("machine_id")
+                val = float(obj.get("value", 1.0))
+                if mid in machines:
+                    machines[mid].throughput_factor = max(0.2, min(2.0, val))
+                    machines[mid].last_change = datetime.utcnow().isoformat() + "Z"
             elif action == "add_machine":
                 new_id = obj.get("machine_id", f"M_new_{len(machines)+1}")
+                name = obj.get("name", f"Machine {len(machines)+1}")
                 pos = int(obj.get("position", len(machines)+1))
                 base_rate = float(obj.get("base_rate", 50))
-                machines.append(Machine(new_id, base_rate, pos))
-                normalize_machine_positions()
-            elif action == "import_config":
-                # replace machines/state with supplied config
-                cfg = obj.get("config")
-                if isinstance(cfg, dict):
-                    # simple mapping, expect keys 'machines' list and 'twin_state'
-                    new_machines = []
-                    for m in cfg.get("machines", []):
-                        new_machines.append(Machine(m["id"], float(m.get("base_rate", 50)), int(m.get("position", 1))))
-                    if new_machines:
-                        machines.clear()
-                        machines.extend(new_machines)
-                    # load twin-level items
-                    ts = cfg.get("twin_state", {})
-                    twin_state["staffing_shifts"] = int(ts.get("staffing_shifts", twin_state["staffing_shifts"]))
-                    twin_state["ambient_temp"] = float(ts.get("ambient_temp", twin_state["ambient_temp"]))
-                    twin_state["ambient_humidity"] = float(ts.get("ambient_humidity", twin_state["ambient_humidity"]))
-                else:
-                    await websocket.send_text(json.dumps({"type":"error","payload":"invalid config payload"}))
-                    continue
+                
+                async with machines_lock:
+                    machines[new_id] = Machine(new_id, name, base_rate, pos)
+                    normalize_machine_positions()
+            elif action == "reset_simulation":
+                reset_simulation()
             else:
                 await websocket.send_text(json.dumps({"type":"error","payload":"unknown action"}))
                 continue
 
-            # After action, broadcast updated snapshot
-            snapshot = {
+            current_payload = {
                 "time": twin_state["time"],
                 "ambient_temp": twin_state["ambient_temp"],
                 "ambient_humidity": twin_state["ambient_humidity"],
                 "total_output": twin_state["total_output"],
-                "machines": [m.to_dict() for m in sorted(machines, key=lambda x: x.position)],
-                "bottlenecks": [m.id for m in machines if m.queue > 5],
+                "machines": machines_snapshot(),
+                "bottlenecks": [m_id for m_id, m in machines.items() if m.queue > 5],
                 "staffing_shifts": twin_state["staffing_shifts"],
             }
-            await manager.broadcast({"type": "metrics", "payload": snapshot})
-
+            await manager.broadcast({"type": "metrics", "payload": current_payload})
+            
     except WebSocketDisconnect:
         manager.disconnect(websocket)
-    except Exception:
+    except Exception as e:
+        print(f"WebSocket error: {e}")
         manager.disconnect(websocket)
 
 # -------------------
-# HTTP endpoints: enhanced with better error handling
+# HTTP ENDPOINTS (now with authentication where needed)
 # -------------------
-def require_api_key(x_api_key: str = Header(None)):
-    if x_api_key != API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid API Key")
-
 @app.get("/")
 async def index():
+    """Serve the main dashboard"""
     return FileResponse("index.html")
 
 @app.get("/api/history")
-async def api_history(minutes: int = 60):
-    # returns list of snapshots for last N minutes
+async def api_history(minutes: int = 60, current_user: dict = Depends(get_current_user)):
     rows = query_history(minutes)
     return {"minutes": minutes, "count": len(rows), "snapshots": rows}
 
 @app.get("/api/latest")
-async def api_latest():
-    # return latest saved snapshot (last row)
+async def api_latest(current_user: dict = Depends(get_current_user)):
     with db_lock:
         cur = db_conn.cursor()
         cur.execute("SELECT payload FROM metrics ORDER BY id DESC LIMIT 1")
@@ -572,248 +989,47 @@ async def api_latest():
     return json.loads(r[0])
 
 @app.post("/api/export")
-async def api_export(x_api_key: str = Header(None)):
-    require_api_key(x_api_key)
+async def api_export(current_user: dict = Depends(require_admin)):
     data = {
         "twin_state": twin_state,
-        "machines": [m.to_dict() for m in machines],
+        "machines": machines_snapshot(),
     }
     return JSONResponse(content=data)
 
 @app.post("/api/import")
-async def api_import(payload: dict, x_api_key: str = Header(None)):
-    global machines
-    require_api_key(x_api_key)
-    # Expect payload with twin_state and machines
+async def api_import(payload: dict, current_user: dict = Depends(require_admin)):
     ms = payload.get("machines")
     ts = payload.get("twin_state")
     if not isinstance(ms, list):
         raise HTTPException(status_code=400, detail="Invalid machines list")
-    new_machines = []
-    for m in ms:
-        new_machines.append(Machine(m["id"], float(m.get("base_rate", 50)), int(m.get("position", 1))))
+    
     machines.clear()
-    machines.extend(new_machines)
-    # load twin state fields if present
+    for m_data in ms:
+        machine = Machine(
+            m_data["id"], 
+            m_data.get("name", m_data["id"]), 
+            float(m_data.get("base_rate", 50)), 
+            int(m_data.get("position", 1))
+        )
+        machine.from_dict(m_data)
+        machines[machine.id] = machine
+    
+    normalize_machine_positions()
+    
     if isinstance(ts, dict):
         twin_state["staffing_shifts"] = int(ts.get("staffing_shifts", twin_state["staffing_shifts"]))
         twin_state["ambient_temp"] = float(ts.get("ambient_temp", twin_state["ambient_temp"]))
         twin_state["ambient_humidity"] = float(ts.get("ambient_humidity", twin_state["ambient_humidity"]))
     return {"ok": True}
 
-# -------------------
-# Enhanced Presets endpoints with backwards compatibility
-# -------------------
-@app.post("/api/presets")
-async def save_preset(payload: dict, x_api_key: str = Header(None)):
-    require_api_key(x_api_key)
-    
-    try:
-        name = validate_preset_name(payload.get("name", ""))
-        description = payload.get("description", "").strip()[:200]  # Limit description length
-        
-        config = {
-            "twin_state": twin_state.copy(),
-            "machines": [m.to_dict() for m in machines],
-        }
-        
-        created_at = datetime.utcnow().isoformat() + "Z"
-        
-        with db_lock:
-            cur = db_conn.cursor()
-            try:
-                # Check if the new columns exist before using them
-                if check_column_exists(db_conn, 'presets', 'description') and check_column_exists(db_conn, 'presets', 'created_at'):
-                    cur.execute(
-                        "INSERT INTO presets (name, description, config, created_at) VALUES (?, ?, ?, ?)", 
-                        (name, description, json.dumps(config), created_at)
-                    )
-                else:
-                    # Fallback for old schema
-                    cur.execute(
-                        "INSERT INTO presets (name, config) VALUES (?, ?)", 
-                        (name, json.dumps(config))
-                    )
-                db_conn.commit()
-                preset_id = cur.lastrowid
-            except sqlite3.IntegrityError:
-                raise HTTPException(status_code=400, detail="A preset with this name already exists")
-        
-        return {"ok": True, "id": preset_id, "message": f"Preset '{name}' saved successfully"}
-    
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail="Failed to save preset")
-
-@app.get("/api/presets")
-async def list_presets():
-    with db_lock:
-        cur = db_conn.cursor()
-        
-        # Check if new columns exist and query accordingly
-        if check_column_exists(db_conn, 'presets', 'description') and check_column_exists(db_conn, 'presets', 'created_at'):
-            cur.execute("SELECT id, name, description, created_at FROM presets ORDER BY created_at DESC")
-            rows = cur.fetchall()
-            return [
-                {
-                    "id": r[0], 
-                    "name": r[1], 
-                    "description": r[2] or "", 
-                    "created_at": r[3] or datetime.utcnow().isoformat() + "Z"
-                } 
-                for r in rows
-            ]
-        else:
-            # Fallback for old schema
-            cur.execute("SELECT id, name FROM presets ORDER BY id DESC")
-            rows = cur.fetchall()
-            return [
-                {
-                    "id": r[0], 
-                    "name": r[1], 
-                    "description": "", 
-                    "created_at": datetime.utcnow().isoformat() + "Z"
-                } 
-                for r in rows
-            ]
-
-@app.post("/api/presets/{preset_id}/load")
-async def load_preset(preset_id: int, x_api_key: str = Header(None)):
-    global machines
-    require_api_key(x_api_key)
-    
-    with db_lock:
-        cur = db_conn.cursor()
-        cur.execute("SELECT name, config FROM presets WHERE id = ?", (preset_id,))
-        row = cur.fetchone()
-    
-    if not row:
-        raise HTTPException(status_code=404, detail="Preset not found")
-    
-    preset_name, config_json = row
-    
-    try:
-        cfg = json.loads(config_json)
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=500, detail="Corrupted preset data")
-    
-    # Validate configuration structure
-    if not isinstance(cfg, dict) or "machines" not in cfg or "twin_state" not in cfg:
-        raise HTTPException(status_code=500, detail="Invalid preset configuration")
-    
-    try:
-        # Load machines with complete state restoration
-        new_machines = []
-        for machine_data in cfg.get("machines", []):
-            machine = Machine(
-                machine_data["id"], 
-                float(machine_data.get("base_rate", 50)), 
-                int(machine_data.get("position", 1))
-            )
-            # Restore complete machine state
-            machine.from_dict(machine_data)
-            new_machines.append(machine)
-        
-        # Replace machines
-        machines.clear()
-        machines.extend(new_machines)
-        normalize_machine_positions()
-        
-        # Load complete twin state
-        saved_twin_state = cfg.get("twin_state", {})
-        twin_state.clear()
-        twin_state.update(saved_twin_state)
-        twin_state["time"] = datetime.utcnow().isoformat() + "Z"  # Update timestamp
-        
-        return {"ok": True, "message": f"Preset '{preset_name}' loaded successfully"}
-    
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to load preset: {str(e)}")
-
-@app.post("/api/presets/{preset_id}/duplicate")
-async def duplicate_preset(preset_id: int, payload: dict, x_api_key: str = Header(None)):
-    require_api_key(x_api_key)
-    
-    # Get original preset
-    with db_lock:
-        cur = db_conn.cursor()
-        if check_column_exists(db_conn, 'presets', 'description'):
-            cur.execute("SELECT name, description, config FROM presets WHERE id = ?", (preset_id,))
-            row = cur.fetchone()
-            if row:
-                original_name, original_description, config_json = row
-            else:
-                raise HTTPException(status_code=404, detail="Preset not found")
-        else:
-            cur.execute("SELECT name, config FROM presets WHERE id = ?", (preset_id,))
-            row = cur.fetchone()
-            if row:
-                original_name, config_json = row
-                original_description = ""
-            else:
-                raise HTTPException(status_code=404, detail="Preset not found")
-    
-    try:
-        new_name = validate_preset_name(payload.get("name", f"{original_name} (Copy)"))
-        new_description = payload.get("description", original_description or "").strip()[:200]
-        
-        created_at = datetime.utcnow().isoformat() + "Z"
-        
-        with db_lock:
-            cur = db_conn.cursor()
-            try:
-                if check_column_exists(db_conn, 'presets', 'description') and check_column_exists(db_conn, 'presets', 'created_at'):
-                    cur.execute(
-                        "INSERT INTO presets (name, description, config, created_at) VALUES (?, ?, ?, ?)", 
-                        (new_name, new_description, config_json, created_at)
-                    )
-                else:
-                    cur.execute(
-                        "INSERT INTO presets (name, config) VALUES (?, ?)", 
-                        (new_name, config_json)
-                    )
-                db_conn.commit()
-                new_preset_id = cur.lastrowid
-            except sqlite3.IntegrityError:
-                raise HTTPException(status_code=400, detail="A preset with this name already exists")
-        
-        return {"ok": True, "id": new_preset_id, "message": f"Preset duplicated as '{new_name}'"}
-    
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail="Failed to duplicate preset")
-
-@app.delete("/api/presets/{preset_id}")
-async def delete_preset(preset_id: int, x_api_key: str = Header(None)):
-    require_api_key(x_api_key)
-    
-    with db_lock:
-        cur = db_conn.cursor()
-        cur.execute("SELECT name FROM presets WHERE id = ?", (preset_id,))
-        row = cur.fetchone()
-        
-        if not row:
-            raise HTTPException(status_code=404, detail="Preset not found")
-        
-        preset_name = row[0]
-        cur.execute("DELETE FROM presets WHERE id = ?", (preset_id,))
-        db_conn.commit()
-    
-    return {"ok": True, "message": f"Preset '{preset_name}' deleted successfully"}
-
 @app.post("/api/reset")
-async def reset_simulation_endpoint(x_api_key: str = Header(None)):
-    require_api_key(x_api_key)
-    
+async def reset_simulation_endpoint(current_user: dict = Depends(require_admin)):
     try:
         reset_simulation()
         return {"ok": True, "message": "Simulation reset to initial state"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to reset simulation: {str(e)}")
 
-# -------------------
-# Run uvicorn to start
-# -------------------
-# Start with: uvicorn backend:app --reload --host 0.0.0.0 --port 8000
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
