@@ -515,4 +515,4 @@ st.download_button(
 
 st.caption("Pro + Simulator: Inject failures/spikes from the sidebar to see KPIs, gauges, and timelines react immediately.")
 
-# run it with this : streamlit run ai_Predictive.py
+# To run this app, use the Docker container as described in the project README.
