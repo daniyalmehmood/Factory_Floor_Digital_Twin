@@ -1,64 +1,56 @@
 # Factory_Floor_Digital_Twin
+
+Here is an overview of the setup process for the Factory Floor Digital Twin project:
+
 ## Prerequisites
 
-Before you begin, ensure you have the following installed on your system:
+- **Python 3.7+**: [Download Python](https://www.python.org/downloads/)
+- **pip**: Usually included with Python installations.
 
-*   **Python 3.7+**: Download and install Python from the [official website](https://www.python.org/downloads/).
-*   **pip**: The Python package installer. It's usually included with Python installations.
+## Installation (Local Development)
 
-## Installation
-
-1.  **Install project dependencies**: Use `pip` to install the required libraries. This includes FastAPI, Uvicorn, and Jinja2.
-
+1. **Install project dependencies**:
     ```bash
     pip install "fastapi[all]"
+    pip install paho-mqtt python-multipart
+    ```
+2. **Run the application**:
+    ```bash
+    uvicorn backend:app --host 0.0.0.0 --port 8000
+    ```
+   The server will be available at [http://localhost:8000](http://localhost:8000).
+
+## Dockerized Setup
+
+### Run with Docker Compose (Recommended)
+
+1. **Build and start the containers**:
+    ```bash
+    docker-compose up --build
+    ```
+2. **Access**: Open [http://localhost:8000](http://localhost:8000) in your browser.
+3. **Stop containers**:
+    ```bash
+    docker-compose down
     ```
 
-    - **paho-mqtt**: Used for MQTT messaging between devices and the backend, enabling real-time communication in the digital twin environment.
-    - **python-multipart**: Required by FastAPI to handle file uploads via multipart/form-data requests.
+### Run with Docker Only
 
+1. **Build the Docker image**:
+    ```bash
+    docker build -t factory-floor-digital-twin .
+    ```
+2. **Run the container**:
+    ```bash
+    docker run -d -p 8000:8000 factory-floor-digital-twin
+    ```
+3. **Access**: Open [http://localhost:8000](http://localhost:8000).
 
-## Running the Application
+## Demo Credentials
 
-To start the application, navigate to your project's root directory in the terminal and run the following command. The `--reload` flag enables hot-reloading, so the server will automatically restart when you make changes to your code.
+- **Admin**: username: `admin`, password: `admin123`
+- You can register new users (Admin or Viewer roles) via the web UI.
 
-
-uvicorn backend:app --host 0.0.0.0 --port 8000
-
-## Docker Support
-
-This project is fully containerized with Docker, allowing users to run the application without manually installing Python or dependencies on their local machine.
-We have included the following Docker-related files in the repository:
-
-- Dockerfile: Defines the application’s Docker image, including the base image, dependencies, and build instructions.
-- docker-compose.yml: Provides a simple way to start the application (and any additional services) with a single command.
-- .dockerignore: Lists files and directories that should be excluded from the Docker build context to reduce image size.
-- requirements.txt – Specifies all Python dependencies required by the application.
-
-So, anyone can clone the repository, build the Docker image, and run the application in a fully isolated environment—without having to manually install Python or any dependencies.
-
-## Run with Docker Compose (Recommended)
-
-1. Build and start the container
-```bash
-docker-compose up --build
-```
-2. Access the application in your browser:  http://localhost:8000
-3. Stop the container
-```bash
-docker-compose down
-```
-
-## Run with Docker Only
-1. Build the Docker image
-```bash
-docker build -t factory-floor-digital-twin .
-```
-2. Run the container
-```bash
-docker run -d -p 8000:8000 factory-floor-digital-twin
-```
-3. Access the application: http://localhost:8000
 
 ## Documentation diagrams:
 ### 1. Architecture Diagram
