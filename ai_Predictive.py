@@ -366,3 +366,4 @@ st.download_button(
 st.caption("Pro + Simulator: Inject failures/spikes from the sidebar to see KPIs, gauges, and timelines react immediately.")
 
 #run it with this : streamlit AI_Predictive _aya.py
+
