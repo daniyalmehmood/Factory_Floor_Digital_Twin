@@ -5,18 +5,21 @@ import random
 import sqlite3
 import uuid
 from datetime import datetime, timedelta
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 import threading
 import time
 import os
 import re
+import secrets
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException, Header
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException, Header, Depends, status, Query
 from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.templating import Jinja2Templates
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
+import jwt
+from passlib.context import CryptContext
 
 import paho.mqtt.client as mqtt  # for optional external ingestion
 
@@ -32,6 +35,11 @@ MQTT_TOPIC = os.environ.get("MQTT_TOPIC", "/factory/digitaltwin/sensors")
 TICK_SECONDS = 2.0
 SECONDS_PER_MIN = 60.0
 
+# JWT Configuration
+JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY", secrets.token_urlsafe(32))
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRATION_HOURS = 24
+
 app = FastAPI()
 
 # Allow local testing from file:// or localhost dev server
@@ -46,6 +54,12 @@ app.add_middleware(
 # Mount static files - this is important for serving your index.html
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
+# Password hashing
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+# HTTP Bearer for token authentication
+security = HTTPBearer(auto_error=False)
+
 # -----------------------
 # PYDANTIC MODELS
 # -----------------------
@@ -57,6 +71,135 @@ class MachineIn(BaseModel):
 class PresetIn(BaseModel):
     name: str
     description: str = ""
+
+class UserCreate(BaseModel):
+    username: str
+    password: str
+    role: str = "viewer"  # Default to viewer role
+
+class UserLogin(BaseModel):
+    username: str
+    password: str
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+    user: dict
+
+# -------------------
+# AUTHENTICATION HELPERS
+# -------------------
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """Verify a password against its hash"""
+    return pwd_context.verify(plain_password, hashed_password)
+
+def get_password_hash(password: str) -> str:
+    """Hash a password"""
+    return pwd_context.hash(password)
+
+def create_access_token(data: dict) -> str:
+    """Create a JWT access token"""
+    to_encode = data.copy()
+    expire = datetime.utcnow() + timedelta(hours=JWT_EXPIRATION_HOURS)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
+    return encoded_jwt
+
+def verify_token(token: str) -> Optional[dict]:
+    """Verify and decode a JWT token"""
+    try:
+        payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
+        return payload
+    except jwt.PyJWTError:
+        return None
+
+def get_user_by_username(username: str) -> Optional[dict]:
+    """Get user by username from database"""
+    with db_lock:
+        cur = db_conn.cursor()
+        cur.execute("SELECT id, username, password_hash, role, created_at, last_login FROM users WHERE username = ?", (username,))
+        row = cur.fetchone()
+        if row:
+            return {
+                "id": row[0],
+                "username": row[1],
+                "password_hash": row[2],
+                "role": row[3],
+                "created_at": row[4],
+                "last_login": row[5]
+            }
+    return None
+
+def get_user_by_id(user_id: int) -> Optional[dict]:
+    """Get user by ID from database"""
+    with db_lock:
+        cur = db_conn.cursor()
+        cur.execute("SELECT id, username, password_hash, role, created_at, last_login FROM users WHERE id = ?", (user_id,))
+        row = cur.fetchone()
+        if row:
+            return {
+                "id": row[0],
+                "username": row[1],
+                "password_hash": row[2],
+                "role": row[3],
+                "created_at": row[4],
+                "last_login": row[5]
+            }
+    return None
+
+def update_last_login(user_id: int):
+    """Update user's last login timestamp"""
+    with db_lock:
+        cur = db_conn.cursor()
+        now = datetime.utcnow().isoformat() + "Z"
+        cur.execute("UPDATE users SET last_login = ? WHERE id = ?", (now, user_id))
+        db_conn.commit()
+
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
+    """Get current authenticated user"""
+    if not credentials:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+        
+    token = credentials.credentials
+    payload = verify_token(token)
+    
+    if payload is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    user_id = payload.get("sub")
+    if user_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    user = get_user_by_id(int(user_id))
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    return user
+
+def require_admin(current_user: dict = Depends(get_current_user)) -> dict:
+    """Require admin role"""
+    if current_user["role"] != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required"
+        )
+    return current_user
 
 # -------------------
 # DATABASE (SQLite)
@@ -120,6 +263,41 @@ def migrate_database(conn):
             print(f"Migration to version 1 failed: {e}")
             conn.rollback()
 
+    # Migration to version 2: Add users table
+    if current_version < 2:
+        print("Migrating database to version 2...")
+        try:
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'viewer',
+                created_at TEXT NOT NULL,
+                last_login TEXT
+            );
+            """)
+            
+            # Create default admin user if no users exist
+            cursor.execute("SELECT COUNT(*) FROM users")
+            user_count = cursor.fetchone()[0]
+            
+            if user_count == 0:
+                admin_password_hash = get_password_hash("admin123")  # Default admin password
+                created_at = datetime.utcnow().isoformat() + "Z"
+                cursor.execute("""
+                INSERT INTO users (username, password_hash, role, created_at) 
+                VALUES (?, ?, ?, ?)
+                """, ("admin", admin_password_hash, "admin", created_at))
+                print("Created default admin user (username: admin, password: admin123)")
+            
+            conn.commit()
+            set_db_version(conn, 2)
+            print("Database migration to version 2 completed")
+        except Exception as e:
+            print(f"Migration to version 2 failed: {e}")
+            conn.rollback()
+
 def init_db():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     c = conn.cursor()
@@ -139,6 +317,18 @@ def init_db():
         description TEXT,
         config TEXT NOT NULL,
         created_at TEXT NOT NULL
+    );
+    """)
+    
+    # Create users table
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT NOT NULL UNIQUE,
+        password_hash TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'viewer',
+        created_at TEXT NOT NULL,
+        last_login TEXT
     );
     """)
     
@@ -326,41 +516,132 @@ def process_production_tick(delta_seconds: float):
 # -------------------
 class ConnectionManager:
     def __init__(self):
-        self.active: List[WebSocket] = []
+        self.active: List[Dict[str, any]] = []
 
-    async def connect(self, websocket: WebSocket):
+    async def connect(self, websocket: WebSocket, user: Optional[dict] = None):
         await websocket.accept()
-        self.active.append(websocket)
+        connection_info = {
+            "websocket": websocket,
+            "user": user,
+            "connected_at": datetime.utcnow()
+        }
+        self.active.append(connection_info)
 
     def disconnect(self, websocket: WebSocket):
-        if websocket in self.active:
-            self.active.remove(websocket)
+        self.active = [conn for conn in self.active if conn["websocket"] != websocket]
 
     async def broadcast(self, message: Dict):
         data = json.dumps(message) if isinstance(message, dict) else message
         living = []
-        for ws in list(self.active):
+        for conn_info in list(self.active):
             try:
                 if isinstance(data, str):
-                    await ws.send_text(data)
+                    await conn_info["websocket"].send_text(data)
                 else:
-                    await ws.send_json(data)
-                living.append(ws)
+                    await conn_info["websocket"].send_json(data)
+                living.append(conn_info)
             except Exception:
                 pass
         self.active = living
 
 manager = ConnectionManager()
 
+# -------------------
+# AUTHENTICATION ENDPOINTS
+# -------------------
+@app.post("/api/register")
+async def register(user_data: UserCreate):
+    """Register a new user"""
+    # Validate username
+    if not user_data.username or len(user_data.username.strip()) < 3:
+        raise HTTPException(status_code=400, detail="Username must be at least 3 characters long")
+    
+    if not re.match(r'^[a-zA-Z0-9_-]+$', user_data.username):
+        raise HTTPException(status_code=400, detail="Username can only contain letters, numbers, hyphens, and underscores")
+    
+    # Validate password
+    if len(user_data.password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters long")
+    
+    # Validate role
+    if user_data.role not in ["admin", "viewer"]:
+        raise HTTPException(status_code=400, detail="Role must be either 'admin' or 'viewer'")
+    
+    # Check if user already exists
+    existing_user = get_user_by_username(user_data.username)
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Username already registered")
+    
+    # Hash password and create user
+    try:
+        password_hash = get_password_hash(user_data.password)
+        created_at = datetime.utcnow().isoformat() + "Z"
+        
+        with db_lock:
+            cur = db_conn.cursor()
+            cur.execute("""
+            INSERT INTO users (username, password_hash, role, created_at) 
+            VALUES (?, ?, ?, ?)
+            """, (user_data.username, password_hash, user_data.role, created_at))
+            db_conn.commit()
+            user_id = cur.lastrowid
+        
+        return {"message": "User registered successfully", "user_id": user_id}
+    except Exception as e:
+        print(f"Registration error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to register user")
+
+@app.post("/api/token")
+async def login(user_credentials: UserLogin):
+    """Authenticate user and return JWT token"""
+    user = get_user_by_username(user_credentials.username)
+    
+    if not user or not verify_password(user_credentials.password, user["password_hash"]):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    # Update last login
+    update_last_login(user["id"])
+    
+    # Create access token
+    access_token = create_access_token(data={"sub": str(user["id"])})
+    
+    # Return token and user info
+    user_info = {
+        "id": user["id"],
+        "username": user["username"],
+        "role": user["role"]
+    }
+    
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user": user_info
+    }
+
+@app.get("/api/me")
+async def get_me(current_user: dict = Depends(get_current_user)):
+    """Get current user information"""
+    return {
+        "id": current_user["id"],
+        "username": current_user["username"],
+        "role": current_user["role"],
+        "created_at": current_user["created_at"],
+        "last_login": current_user["last_login"]
+    }
+
 # -----------------------
-# REST API ENDPOINTS
+# REST API ENDPOINTS (now with authentication)
 # -----------------------
 @app.get('/api/machines')
-async def list_machines():
+async def list_machines(current_user: dict = Depends(get_current_user)):
     return machines_snapshot()
 
 @app.post('/api/machines', status_code=201)
-async def create_machine(payload: MachineIn):
+async def create_machine(payload: MachineIn, current_user: dict = Depends(require_admin)):
     async with machines_lock:
         mid = str(uuid.uuid4())
         m = Machine(mid, payload.name, payload.base_rate, payload.position)
@@ -371,7 +652,7 @@ async def create_machine(payload: MachineIn):
     return m.to_dict()
 
 @app.put('/api/machines/{machine_id}')
-async def update_machine(machine_id: str, payload: MachineIn):
+async def update_machine(machine_id: str, payload: MachineIn, current_user: dict = Depends(require_admin)):
     async with machines_lock:
         if machine_id not in machines:
             raise HTTPException(status_code=404, detail='Machine not found')
@@ -387,7 +668,7 @@ async def update_machine(machine_id: str, payload: MachineIn):
     return m.to_dict()
 
 @app.delete('/api/machines/{machine_id}')
-async def delete_machine(machine_id: str):
+async def delete_machine(machine_id: str, current_user: dict = Depends(require_admin)):
     async with machines_lock:
         if machine_id not in machines:
             raise HTTPException(status_code=404, detail='Machine not found')
@@ -400,10 +681,10 @@ async def delete_machine(machine_id: str):
     return {'status': 'deleted', 'id': machine_id}
 
 # -----------------------
-# PRESET ENDPOINTS
+# PRESET ENDPOINTS (now with authentication)
 # -----------------------
 @app.get('/api/presets')
-async def list_presets():
+async def list_presets(current_user: dict = Depends(get_current_user)):
     with db_lock:
         cur = db_conn.cursor()
         cur.execute("SELECT id, name, description, created_at FROM presets ORDER BY created_at DESC")
@@ -420,10 +701,7 @@ async def list_presets():
     return presets
 
 @app.post('/api/presets', status_code=201)
-async def create_preset(payload: PresetIn, x_api_key: str = Header(None)):
-    if x_api_key != API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid API Key")
-    
+async def create_preset(payload: PresetIn, current_user: dict = Depends(require_admin)):
     try:
         name = validate_preset_name(payload.name)
     except ValueError as e:
@@ -454,10 +732,7 @@ async def create_preset(payload: PresetIn, x_api_key: str = Header(None)):
     }
 
 @app.post('/api/presets/{preset_id}/load')
-async def load_preset(preset_id: int, x_api_key: str = Header(None)):
-    if x_api_key != API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid API Key")
-    
+async def load_preset(preset_id: int, current_user: dict = Depends(require_admin)):
     with db_lock:
         cur = db_conn.cursor()
         cur.execute("SELECT name, config FROM presets WHERE id = ?", (preset_id,))
@@ -509,10 +784,7 @@ async def load_preset(preset_id: int, x_api_key: str = Header(None)):
         raise HTTPException(status_code=500, detail=f"Error loading preset: {str(e)}")
 
 @app.delete('/api/presets/{preset_id}')
-async def delete_preset(preset_id: int, x_api_key: str = Header(None)):
-    if x_api_key != API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid API Key")
-    
+async def delete_preset(preset_id: int, current_user: dict = Depends(require_admin)):
     with db_lock:
         cur = db_conn.cursor()
         cur.execute("DELETE FROM presets WHERE id = ?", (preset_id,))
@@ -556,11 +828,20 @@ async def startup_event():
     asyncio.create_task(simulator_loop())
 
 # -----------------------
-# WEBSOCKET ENDPOINT - Enhanced with better error handling
+# WEBSOCKET ENDPOINT - Enhanced with authentication
 # -----------------------
 @app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    await manager.connect(websocket)
+async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(None)):
+    # Try to authenticate user if token is provided
+    user = None
+    if token:
+        payload = verify_token(token)
+        if payload:
+            user_id = payload.get("sub")
+            if user_id:
+                user = get_user_by_id(int(user_id))
+    
+    await manager.connect(websocket, user)
     try:
         initial_payload = {
             "time": twin_state["time"],
@@ -573,6 +854,25 @@ async def websocket_endpoint(websocket: WebSocket):
         }
         await websocket.send_text(json.dumps({"type": "metrics", "payload": initial_payload}))
         
+        # Send authentication status
+        if user:
+            await websocket.send_text(json.dumps({
+                "type": "auth_status", 
+                "payload": {
+                    "authenticated": True,
+                    "user": {
+                        "id": user["id"],
+                        "username": user["username"],
+                        "role": user["role"]
+                    }
+                }
+            }))
+        else:
+            await websocket.send_text(json.dumps({
+                "type": "auth_status", 
+                "payload": {"authenticated": False}
+            }))
+        
         while True:
             msg = await websocket.receive_text()
             try:
@@ -582,7 +882,6 @@ async def websocket_endpoint(websocket: WebSocket):
                 continue
 
             action = obj.get("action")
-            key = obj.get("api_key", "")
             
             # Unprotected actions
             if action == "get_snapshot":
@@ -601,13 +900,16 @@ async def websocket_endpoint(websocket: WebSocket):
                 await websocket.send_json({'type': 'pong'})
                 continue
 
-            # Protected actions - require API key OR allow simple controls without key
-            protected_actions = ["import_config", "reset_simulation", "load_preset"]
-            if action in protected_actions and key != API_KEY:
-                await websocket.send_text(json.dumps({"type":"error","payload":"API key required for this action"}))
+            # All other commands require authentication and admin role
+            if not user:
+                await websocket.send_text(json.dumps({"type":"error","payload":"authentication required"}))
+                continue
+            
+            if user["role"] != "admin":
+                await websocket.send_text(json.dumps({"type":"error","payload":"admin access required"}))
                 continue
 
-            # Handle commands
+            # Handle admin commands
             if action == "add_shift":
                 twin_state["staffing_shifts"] = min(3, twin_state["staffing_shifts"] + 1)
             elif action == "remove_shift":
@@ -664,45 +966,20 @@ async def websocket_endpoint(websocket: WebSocket):
         manager.disconnect(websocket)
 
 # -------------------
-# HTTP ENDPOINTS
+# HTTP ENDPOINTS (now with authentication where needed)
 # -------------------
-def require_api_key(x_api_key: str = Header(None)):
-    if x_api_key != API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid API Key")
-
 @app.get("/")
 async def index():
-    """Serve the main dashboard from static/index.html"""
-    try:
-        return FileResponse("static/index.html")
-    except FileNotFoundError:
-        return HTMLResponse("""
-        <html>
-            <head><title>Factory Digital Twin - File Not Found</title></head>
-            <body>
-                <h1>🏭 Factory Digital Twin</h1>
-                <div style="background: #fee; padding: 20px; border-radius: 8px; margin: 20px;">
-                    <h2>Dashboard file not found!</h2>
-                    <p><strong>Expected file:</strong> <code>static/index.html</code></p>
-                    <p>Please ensure you have created the <code>static/index.html</code> file.</p>
-                    <p><strong>Available endpoints:</strong></p>
-                    <ul>
-                        <li><a href="/api/machines">GET /api/machines</a> - List all machines</li>
-                        <li><a href="/api/presets">GET /api/presets</a> - List all presets</li>
-                        <li><code>ws://localhost:8000/ws</code> - WebSocket connection</li>
-                    </ul>
-                </div>
-            </body>
-        </html>
-        """, status_code=404)
+    """Serve the main dashboard"""
+    return FileResponse("index.html")
 
 @app.get("/api/history")
-async def api_history(minutes: int = 60):
+async def api_history(minutes: int = 60, current_user: dict = Depends(get_current_user)):
     rows = query_history(minutes)
     return {"minutes": minutes, "count": len(rows), "snapshots": rows}
 
 @app.get("/api/latest")
-async def api_latest():
+async def api_latest(current_user: dict = Depends(get_current_user)):
     with db_lock:
         cur = db_conn.cursor()
         cur.execute("SELECT payload FROM metrics ORDER BY id DESC LIMIT 1")
@@ -712,8 +989,7 @@ async def api_latest():
     return json.loads(r[0])
 
 @app.post("/api/export")
-async def api_export(x_api_key: str = Header(None)):
-    require_api_key(x_api_key)
+async def api_export(current_user: dict = Depends(require_admin)):
     data = {
         "twin_state": twin_state,
         "machines": machines_snapshot(),
@@ -721,8 +997,7 @@ async def api_export(x_api_key: str = Header(None)):
     return JSONResponse(content=data)
 
 @app.post("/api/import")
-async def api_import(payload: dict, x_api_key: str = Header(None)):
-    require_api_key(x_api_key)
+async def api_import(payload: dict, current_user: dict = Depends(require_admin)):
     ms = payload.get("machines")
     ts = payload.get("twin_state")
     if not isinstance(ms, list):
@@ -746,6 +1021,14 @@ async def api_import(payload: dict, x_api_key: str = Header(None)):
         twin_state["ambient_temp"] = float(ts.get("ambient_temp", twin_state["ambient_temp"]))
         twin_state["ambient_humidity"] = float(ts.get("ambient_humidity", twin_state["ambient_humidity"]))
     return {"ok": True}
+
+@app.post("/api/reset")
+async def reset_simulation_endpoint(current_user: dict = Depends(require_admin)):
+    try:
+        reset_simulation()
+        return {"ok": True, "message": "Simulation reset to initial state"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to reset simulation: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
