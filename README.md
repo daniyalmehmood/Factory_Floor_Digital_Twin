@@ -24,3 +24,30 @@ To start the application, navigate to your project's root directory in the termi
 
 ```bash
 uvicorn backend:app --host 0.0.0.0 --port 8000
+
+## Docker Support
+
+This project is fully containerized with Docker, allowing users to run the application without manually installing Python or dependencies on their local machine.
+We have included the following Docker-related files in the repository:
+Dockerfile – Defines the application’s Docker image, including the base image, dependencies, and build instructions.
+docker-compose.yml – Provides a simple way to start the application (and any additional services) with a single command.
+.dockerignore – Lists files and directories that should be excluded from the Docker build context to reduce image size.
+requirements.txt – Specifies all Python dependencies required by the application.
+So, anyone can clone the repository, build the Docker image, and run the application in a fully isolated environment—without having to manually install Python or any dependencies.
+
+## Run with Docker Compose (Recommended)
+1. Build and start the container
+docker-compose up --build
+2. Access the application in your browser
+#    If running locally:
+http://localhost:8000
+3. Stop the container
+docker-compose down
+
+## Run with Docker Only
+1. Build the Docker image
+docker build -t factory-floor-digital-twin .
+2. Run the container
+docker run -d -p 8000:8000 factory-floor-digital-twin
+3. Access the application
+http://localhost:8000
