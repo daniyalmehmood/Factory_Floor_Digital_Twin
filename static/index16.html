@@ -1,175 +1,426 @@
-<!DOCTYPE html>
-<html lang="en">
+<!doctype html>
+<html>
 <head>
-<meta charset="UTF-8">
-<title>Factory Digital Twin - Issue 16</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-<style>
-  body { font-family: Arial, sans-serif; margin: 20px; background:#f4f4f4; }
-  h2 { margin-top: 40px; }
-  .metrics { display: flex; gap: 20px; margin-bottom: 20px; }
-  .card { background:white; padding:15px; border-radius:8px; box-shadow:0 2px 5px rgba(0,0,0,0.1); width: 200px; text-align:center; }
-  canvas { background:white; border-radius:8px; padding:10px; }
-  .controls { margin-top:20px; display:flex; gap:10px; flex-wrap: wrap; }
-  .controls button, .controls input { padding:5px 10px; border-radius:5px; border:1px solid #ccc; }
-  #charts-container { display: flex; flex-wrap: wrap; gap: 20px; }
-  .draggable-chart {
-    width: 420px;
-    background: #fff;
-    border-radius: 8px;
-    box-shadow: 0 2px 5px rgba(0,0,0,0.08);
-    padding: 10px;
-    margin-bottom: 20px;
-    cursor: move;
-  }
-</style>
+  <meta charset="utf-8" />
+  <title>Factory Floor Digital Twin</title>
+  <style>
+    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial; margin: 12px; background: #0b0e11; color:#e8e8e8;}
+    header { display:flex; gap:16px; align-items:center; }
+    .card { background:#151a21; padding:12px; border-radius:10px; box-shadow:0 6px 20px rgba(0,0,0,0.28); margin-bottom:12px; }
+    .grid { display:grid; grid-template-columns: 1fr 440px; gap:12px; }
+    .machines { display:flex; flex-direction:column; gap:8px; max-height:40vh; overflow:auto; }
+    .machine { display:flex; justify-content:space-between; align-items:center; padding:8px; border-radius:8px; border:1px solid #2a3441; cursor:pointer;}
+    .machine:hover { background:#1b2230; }
+    button { padding:8px 10px; border-radius:8px; border: none; background:#2563eb; color:white; cursor:pointer; }
+    button.secondary { background:#10b981; }
+    footer { margin-top:16px; color:#9aa4af; font-size:13px; }
+    label { font-size:13px; color:#cfd8e3 }
+    input[type="number"], input[type="text"], select { padding:6px; border-radius:6px; border:1px solid #2a3441; background:#0f141b; color:#e8e8e8;}
+    .controls { display:flex; flex-direction:column; gap:10px; }
+    .preset { margin-top:6px; }
+    .charts4 { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+    .charts4 canvas { background:#0f141b; border-radius:10px; }
+    h4 { margin: 4px 0 8px; }
+  </style>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
+  <header>
+    <h1>Factory Floor Digital Twin</h1>
+    <div class="card" style="padding:8px;">
+      <div><strong>Connection:</strong> <span id="conn">disconnected</span></div>
+      <div><strong>Shifts:</strong> <span id="shifts">-</span></div>
+      <div><strong>API Key:</strong> <span id="api_status">hidden</span></div>
+    </div>
+  </header>
 
-<h1>Factory Digital Twin · Issue 16</h1>
+  <main class="grid">
+    <section>
+      <div class="card">
+        <h3>Live Metrics</h3>
+        <div><strong>Time:</strong> <span id="time">-</span></div>
+        <div><strong>Total output:</strong> <span id="total_output">0</span></div>
+        <div><strong>Ambient:</strong> <span id="ambient">-</span></div>
+        <div style="margin-top:8px;"><strong>Bottlenecks:</strong> <span id="bottlenecks">none</span></div>
+      </div>
 
-<div class="metrics">
-  <div class="card">Temp: <span id="temp">-</span> °C</div>
-  <div class="card">Humidity: <span id="humidity">-</span> %</div>
-  <div class="card">Total Output: <span id="total_output">-</span></div>
-  <div class="card">Staffing Shifts: <span id="staffing">-</span></div>
-</div>
+      <div class="card">
+        <h3>Historical Output (last 60 mins)</h3>
+        <canvas id="historyChart" height="120"></canvas>
+      </div>
 
-<h2>Machine Queue & Throughput Charts</h2>
-<div id="charts-container"></div>
+      <div class="card">
+        <h3>Machines</h3>
+        <div style="display:flex; gap:8px; align-items:center; margin-bottom:6px;">
+          <label for="machine_select"><strong>Inspect machine:</strong></label>
+          <select id="machine_select"></select>
+          <button id="inspect_btn">Inspect</button>
+        </div>
+        <div class="machines" id="machines"></div>
+      </div>
 
-<h2>Controls</h2>
-<div class="controls">
-  <button onclick="sendAction('add_shift')">Add Shift</button>
-  <button onclick="sendAction('remove_shift')">Remove Shift</button>
-</div>
+      <div class="card">
+        <h3>Queue vs. Throughput — Machine Insights</h3>
+        <div id="inspected_name" style="margin-bottom:6px;color:#9aa4af;">No machine selected</div>
+        <div class="charts4">
+          <div>
+            <h4>Queue Size over Time</h4>
+            <canvas id="q_chart" height="140"></canvas>
+          </div>
+          <div>
+            <h4>Actual Throughput (items/min)</h4>
+            <canvas id="t_chart" height="140"></canvas>
+          </div>
+          <div>
+            <h4>Combined (Dual‑Axis)</h4>
+            <canvas id="qt_combo" height="160"></canvas>
+          </div>
+          <div>
+            <h4>Scatter: Queue vs Throughput</h4>
+            <canvas id="qt_scatter" height="160"></canvas>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <aside>
+      <div class="card">
+        <h3>Simulate & Controls</h3>
+
+        <div class="card">
+          <h4>Scenario Presets</h4>
+          <input type="text" id="preset_name" placeholder="Preset name"/>
+          <button id="save_preset_btn">Save Current Scenario</button>
+          <div id="preset_list" style="margin-top:8px;"></div>
+        </div>
+
+        <div class="controls">
+          <div>
+            <label>Enter API Key (required for changes):</label><br/>
+            <input type="text" id="api_key" placeholder="api key"/>
+            <button id="save_key">Save key</button>
+          </div>
+
+          <div>
+            <button id="add_shift">Add shift</button>
+            <button id="remove_shift" class="secondary">Remove shift</button>
+          </div>
+
+          <div>
+            <label>Toggle machine</label><br/>
+            <select id="toggle_select" style="width:100%"></select>
+            <button id="toggle_machine">Toggle</button>
+          </div>
+
+          <div>
+            <label>Move equipment</label><br/>
+            <select id="move_select"></select>
+            <input type="number" id="move_pos" min="1" value="1"/>
+            <button id="move_btn">Move</button>
+          </div>
+
+          <div>
+            <label>Set throughput factor</label><br/>
+            <select id="thr_select"></select>
+            <input type="number" id="thr_val" step="0.1" min="0.2" max="2.0" value="1.0"/>
+            <button id="set_thr">Set</button>
+          </div>
+
+          <div>
+            <label>Add new machine</label><br/>
+            <input type="text" id="new_id" placeholder="machine id" value="M_new"/>
+            <input type="number" id="new_rate" placeholder="base rate" value="45"/>
+            <button id="add_machine">Add machine</button>
+          </div>
+
+          <div class="card">
+            <h4>Presets</h4>
+            <button class="preset" id="preset_double_staff">Double staff (add shift)</button>
+            <button class="preset" id="preset_maintenance">Maintenance: toggle M2 off</button>
+            <button class="preset" id="preset_move_slow">Move slow machine earlier</button>
+            <div style="margin-top:6px;">
+              <button id="export_btn">Export config</button>
+              <button id="import_btn">Import config (paste JSON)</button>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Quick tips</h3>
+        <ol>
+          <li>Set API key before making changes (defaults to <code>secret123</code> in local env).</li>
+          <li>Use presets to quickly see the impact of staffing and maintenance.</li>
+          <li>Enable MQTT ingestion in backend to test with real sensor messages.</li>
+        </ol>
+      </div>
+    </aside>
+  </main>
+
+  <footer>
+    Built as a teaching demo — extend with persistence, cloud connectivity, role-based access, and charts.
+  </footer>
 
 <script>
-let ws = new WebSocket(`ws://${location.host}/ws`);
-let machinesData = {}; // store charts per machine
+  let ws;
+  let apiKey = "";
+  const apiKeySpan = document.getElementById('api_status');
 
-function createDraggableChart(machine) {
-    const container = document.createElement('div');
-    container.className = 'draggable-chart';
-    container.style.width = '420px';
-    container.style.background = '#fff';
-    container.style.borderRadius = '8px';
-    container.style.boxShadow = '0 2px 5px rgba(0,0,0,0.08)';
-    container.style.padding = '10px';
-    container.style.marginBottom = '20px';
-    container.style.cursor = 'move';
-    container.draggable = true;
-    container.id = `chart_${machine.id}`;
+  // reconnect control (light)
+  let reconnectAttempts = 0, reconnectDelay = 1500, maxReconnectAttempts = 8, maxReconnectDelay = 15000;
 
-    const title = document.createElement('h3');
-    title.textContent = machine.id + ` (${machine.status})`;
-    container.appendChild(title);
-
-    const canvas = document.createElement('canvas');
-    canvas.height = 180;
-    container.appendChild(canvas);
-
-    // Drag events
-    container.addEventListener('dragstart', (e) => {
-      e.dataTransfer.setData('text/plain', container.id);
-      container.style.opacity = '0.5';
-    });
-    container.addEventListener('dragend', (e) => {
-      container.style.opacity = '1';
-    });
-
-    // Allow drop on container
-    container.addEventListener('dragover', (e) => {
-      e.preventDefault();
-    });
-    container.addEventListener('drop', (e) => {
-      e.preventDefault();
-      const draggedId = e.dataTransfer.getData('text/plain');
-      const draggedEl = document.getElementById(draggedId);
-      if (draggedEl && draggedEl !== container) {
-        const parent = container.parentNode;
-        parent.insertBefore(draggedEl, container);
-      }
-    });
-
-    document.getElementById('charts-container').appendChild(container);
-
-    const ctx = canvas.getContext('2d');
-    const chart = new Chart(ctx, {
-      type: 'line',
-      data: {
-        labels: [],
-        datasets: [
-          {
-            label: 'Queue',
-            data: [],
-            borderColor: 'blue',
-            backgroundColor: 'rgba(0,0,255,0.1)',
-            yAxisID: 'y1',
-            spanGaps: true
-          },
-          {
-            label: 'Throughput',
-            data: [],
-            borderColor: 'green',
-            backgroundColor: 'rgba(0,255,0,0.1)',
-            yAxisID: 'y2',
-            spanGaps: true
-          }
-        ]
-      },
-      options: {
-        responsive: true,
-        interaction: { mode: 'index', intersect: false },
-        stacked: false,
-        plugins: { legend: { position: 'top' } },
-        scales: {
-          y1: { type: 'linear', position: 'left', title: { display: true, text: 'Queue (items)' } },
-          y2: { type: 'linear', position: 'right', title: { display: true, text: 'Throughput (items/min)' } },
-          x: { title: { display: true, text: 'Time' } }
-        }
-      }
-    });
-    machinesData[machine.id] = chart;
+  function saveApiKeyToLocal() {
+    apiKey = document.getElementById('api_key').value.trim();
+    if (apiKey) {
+      apiKeySpan.innerText = "stored";
+      sessionStorage.setItem('factory_api_key', apiKey);
+    } else {
+      apiKeySpan.innerText = "hidden";
+      sessionStorage.removeItem('factory_api_key');
+    }
   }
 
-function updateMetrics(payload){
-    document.getElementById('temp').textContent = payload.ambient_temp.toFixed(1);
-    document.getElementById('humidity').textContent = payload.ambient_humidity.toFixed(1);
-    document.getElementById('total_output').textContent = payload.total_output;
-    document.getElementById('staffing').textContent = payload.staffing_shifts;
-}
+  document.getElementById('save_key').onclick = saveApiKeyToLocal;
+  document.addEventListener('DOMContentLoaded', () => {
+    const stored = sessionStorage.getItem('factory_api_key');
+    if (stored) { document.getElementById('api_key').value = stored; apiKey = stored; apiKeySpan.innerText = "stored"; }
+    connect();
+    fetchHistoryAndRender();
+  });
 
-function updateCharts(payload){
-    payload.machines.forEach(m=>{
-        if(!machinesData[m.id]) createDraggableChart(m);
-        const chart = machinesData[m.id];
-        const t = new Date(payload.time).toLocaleTimeString();
-        // Add new points
-        chart.data.labels.push(t);
-        chart.data.datasets[0].data.push(m.queue);
-        chart.data.datasets[1].data.push(m.total_processed*60/2); // approximate throughput per tick
-        if(chart.data.labels.length>50){
-            chart.data.labels.shift();
-            chart.data.datasets.forEach(ds=>ds.data.shift());
-        }
-        chart.update();
+  function connect() {
+    const wsProtocol = location.protocol === 'https:' ? 'wss' : 'ws';
+    ws = new WebSocket(`${wsProtocol}://${location.host}/ws`);
+    ws.onopen = () => { document.getElementById('conn').innerText = 'connected'; reconnectAttempts = 0; reconnectDelay = 1500; };
+    ws.onclose = () => {
+      document.getElementById('conn').innerText = 'disconnected';
+      reconnectAttempts++;
+      if (reconnectAttempts > maxReconnectAttempts) return;
+      setTimeout(connect, reconnectDelay);
+      reconnectDelay = Math.min(reconnectDelay * 2, maxReconnectDelay);
+    };
+    ws.onmessage = (evt) => {
+      const obj = JSON.parse(evt.data);
+      if (obj.type === 'metrics') { renderMetrics(obj.payload); }
+    };
+  }
+
+  function sendProtected(actionObj) {
+    const key = document.getElementById('api_key').value.trim();
+    if (!key) return alert('Enter API key in the controls section above');
+    actionObj.api_key = key;
+    ws.send(JSON.stringify(actionObj));
+  }
+
+  function renderMetrics(payload) {
+    document.getElementById('time').innerText = payload.time;
+    document.getElementById('total_output').innerText = payload.total_output;
+    document.getElementById('ambient').innerText = `${payload.ambient_temp}°C, ${payload.ambient_humidity}%`;
+    document.getElementById('bottlenecks').innerText = payload.bottlenecks.length ? payload.bottlenecks.join(', ') : 'none';
+    document.getElementById('shifts').innerText = payload.staffing_shifts;
+
+    const machinesDiv = document.getElementById('machines');
+    machinesDiv.innerHTML = '';
+    const toggleSel = document.getElementById('toggle_select');
+    const moveSel   = document.getElementById('move_select');
+    const thrSel    = document.getElementById('thr_select');
+    const inspectSel= document.getElementById('machine_select');
+    [toggleSel, moveSel, thrSel, inspectSel].forEach(s => s.innerHTML = '');
+
+    payload.machines.forEach(m => {
+      const el = document.createElement('div');
+      el.className = 'machine';
+      el.title = 'Click to inspect';
+      el.onclick = () => inspectMachine(m.id);
+      el.innerHTML = `<div>
+                        <strong>${m.id}</strong><br/>
+                        pos:${m.position} • status:${m.status} • processed:${m.total_processed}
+                      </div>
+                      <div style="text-align:right">
+                        <div>queue: ${Number(m.queue).toFixed(2)}</div>
+                        <div>throughput factor: ${m.throughput_factor}</div>
+                      </div>`;
+      machinesDiv.appendChild(el);
+
+      [toggleSel, moveSel, thrSel, inspectSel].forEach(s => {
+        const o = document.createElement('option');
+        o.value = m.id; o.text = m.id; s.appendChild(o);
+      });
     });
-}
+  }
 
-function sendAction(action,data={}){
-    ws.send(JSON.stringify({action, ...data}));
-}
+  // buttons
+  document.getElementById('add_shift').onclick = () => sendProtected({action:'add_shift'});
+  document.getElementById('remove_shift').onclick = () => sendProtected({action:'remove_shift'});
+  document.getElementById('toggle_machine').onclick = () => {
+    const mid = document.getElementById('toggle_select').value; sendProtected({action:'toggle_machine', machine_id:mid});
+  };
+  document.getElementById('move_btn').onclick = () => {
+    const mid = document.getElementById('move_select').value; const newpos = parseInt(document.getElementById('move_pos').value||1);
+    sendProtected({action:'move_equipment', machine_id:mid, new_position:newpos});
+  };
+  document.getElementById('set_thr').onclick = () => {
+    const mid = document.getElementById('thr_select').value; const val = parseFloat(document.getElementById('thr_val').value||1.0);
+    sendProtected({action:'set_throughput', machine_id:mid, value: val});
+  };
+  document.getElementById('inspect_btn').onclick = () => {
+    const mid = document.getElementById('machine_select').value; if (mid) inspectMachine(mid);
+  };
 
-ws.onmessage = (event)=>{
-    const msg = JSON.parse(event.data);
-    if(msg.type==='metrics'){
-        updateMetrics(msg.payload);
-        updateCharts(msg.payload);
+  // presets quick actions
+  document.getElementById('preset_double_staff').onclick = () => sendProtected({action:'add_shift'});
+  document.getElementById('preset_maintenance').onclick = () => sendProtected({action:'toggle_machine', machine_id:'M2_press'});
+  document.getElementById('preset_move_slow').onclick = () => sendProtected({action:'move_equipment', machine_id:'M3_paint', new_position:2});
+
+  // History chart
+  async function fetchHistoryAndRender() {
+    const res = await fetch('/api/history?minutes=60');
+    const data = await res.json();
+    const labels = [], outputs = [];
+    for (const s of data.snapshots) {
+      labels.push(new Date(s.time).toLocaleTimeString());
+      outputs.push(s.total_output || 0);
     }
-};
+    renderHistoryChart(labels, outputs);
+  }
+  function renderHistoryChart(labels, outputs) {
+    const ctx = document.getElementById('historyChart').getContext('2d');
+    if (window.historyChart) {
+      window.historyChart.data.labels = labels;
+      window.historyChart.data.datasets[0].data = outputs;
+      window.historyChart.update();
+      return;
+    }
+    window.historyChart = new Chart(ctx, {
+      type: 'line',
+      data: { labels, datasets: [{ label: 'Total output', data: outputs, fill: true, tension: 0.3, borderWidth: 2 }]},
+      options: { scales: { x: { display: true, title:{display:true,text:'Time'} }, y: { beginAtZero: true, title:{display:true,text:'Cumulative'} } } }
+    });
+  }
 
+  // ---------- NEW: four separate charts ----------
+  let qChart, tChart, comboChart, scatterChart;
+  let inspectThrottleTimer = null;
+  function throttleInspect(mid){
+    if (inspectThrottleTimer) return;
+    inspectThrottleTimer = setTimeout(() => { inspectThrottleTimer = null; }, 10000);
+    inspectMachine(mid);
+  }
+
+  async function inspectMachine(machineId) {
+    const nameEl = document.getElementById('inspected_name');
+    nameEl.innerText = `Inspecting: ${machineId}`;
+    nameEl.dataset.mid = machineId;
+
+    const res = await fetch(`/api/machine_timeseries?machine_id=${encodeURIComponent(machineId)}&minutes=60&bucket_seconds=10`);
+    if (!res.ok) return;
+    const data = await res.json();
+
+    const labels = data.points.map(p => new Date(p.ts).toLocaleTimeString());
+    const q = data.points.map(p => p.queue ?? null);
+    const t = data.points.map(p => p.throughput_ipm ?? null);
+    const scatter = data.points.filter(p => p.queue!=null && p.throughput_ipm!=null)
+                               .map(p => ({x:p.queue, y:p.throughput_ipm}));
+
+    // Queue only
+    qChart = upsertLineChart(qChart, 'q_chart', labels, [{label: 'Queue size (items)', data: q, borderWidth: 2}],
+                             {x:{title:{display:true,text:'Time'}}, y:{title:{display:true,text:'Items'}, beginAtZero:true}});
+
+    // Throughput only
+    tChart = upsertLineChart(tChart, 't_chart', labels, [{label: 'Actual throughput (items/min)', data: t, borderWidth: 2}],
+                             {x:{title:{display:true,text:'Time'}}, y:{title:{display:true,text:'Items/min'}, beginAtZero:true}});
+
+    // Combined dual‑axis
+    comboChart = upsertLineChart(comboChart, 'qt_combo', labels, [
+                    {label:'Queue', data:q, yAxisID:'y',  borderWidth:2},
+                    {label:'Throughput', data:t, yAxisID:'y1', borderWidth:2}
+                 ], {
+                    x:{title:{display:true,text:'Time'}},
+                    y:{title:{display:true,text:'Queue (items)'}, beginAtZero:true, position:'left'},
+                    y1:{title:{display:true,text:'Throughput (items/min)'}, beginAtZero:true, position:'right', grid:{drawOnChartArea:false}}
+                 });
+
+    // Scatter
+    scatterChart = upsertScatterChart(scatterChart, 'qt_scatter', scatter,
+                 {x:{title:{display:true,text:'Queue (items)'}}, y:{title:{display:true,text:'Throughput (items/min)'}}});
+  }
+
+  function upsertLineChart(existing, canvasId, labels, datasets, scales){
+    const ctx = document.getElementById(canvasId).getContext('2d');
+    if (existing){
+      existing.data.labels = labels;
+      existing.data.datasets = datasets;
+      existing.options.scales = scales;
+      existing.update(); return existing;
+    }
+    return new Chart(ctx, { type:'line', data:{ labels, datasets },
+      options:{ responsive:true, interaction:{ mode:'index', intersect:false }, stacked:false, scales, plugins:{legend:{display:true}} }});
+  }
+  function upsertScatterChart(existing, canvasId, points, scales){
+    const ctx = document.getElementById(canvasId).getContext('2d');
+    if (existing){
+      existing.data.datasets = [{label:'Q vs T', data:points, pointRadius:3}];
+      existing.options.scales = scales; existing.update(); return existing;
+    }
+    return new Chart(ctx, { type:'scatter', data:{ datasets:[{label:'Q vs T', data:points, pointRadius:3}] },
+      options:{ scales, plugins:{legend:{display:true}} }});
+  }
+
+  // Poll history periodically (every 30s) when visible
+  let historyIntervalId = null;
+  function startHistoryPolling(){ if (!historyIntervalId){ fetchHistoryAndRender(); historyIntervalId = setInterval(fetchHistoryAndRender, 30000);} }
+  function stopHistoryPolling(){ if (historyIntervalId){ clearInterval(historyIntervalId); historyIntervalId = null; } }
+  function handleVisibilityChange(){ if (document.visibilityState === 'visible') startHistoryPolling(); else stopHistoryPolling(); }
+  document.addEventListener('visibilitychange', handleVisibilityChange);
+  if (document.visibilityState === 'visible') startHistoryPolling();
+
+  // Presets UI
+  async function fetchPresets() {
+    const res = await fetch('/api/presets');
+    const presets = await res.json();
+    const listDiv = document.getElementById('preset_list');
+    listDiv.innerHTML = '';
+    presets.forEach(p => {
+      const div = document.createElement('div');
+      div.style.display = 'flex';
+      div.style.justifyContent = 'space-between';
+      div.style.alignItems = 'center';
+      div.style.marginTop = '4px';
+      div.innerHTML = `<span>${p.name}</span>`;
+      const btns = document.createElement('div');
+      const loadBtn = document.createElement('button');
+      loadBtn.textContent = 'Load';
+      loadBtn.onclick = async () => {
+        const key = document.getElementById('api_key').value.trim();
+        if (!key) return alert('Set API key first');
+        await fetch(`/api/presets/${p.id}/load`, {method:'POST', headers:{'X-API-Key': key}});
+      };
+      const delBtn = document.createElement('button');
+      delBtn.textContent = 'Delete';
+      delBtn.onclick = async () => {
+        const key = document.getElementById('api_key').value.trim();
+        if (!key) return alert('Set API key first');
+        await fetch(`/api/presets/${p.id}`, {method:'DELETE', headers:{'X-API-Key': key}});
+        fetchPresets();
+      };
+      btns.appendChild(loadBtn);
+      btns.appendChild(delBtn);
+      div.appendChild(btns);
+      listDiv.appendChild(div);
+    });
+  }
+  document.getElementById('save_preset_btn').onclick = async () => {
+    const name = document.getElementById('preset_name').value.trim();
+    if (!name) return alert('Enter preset name');
+    const key = document.getElementById('api_key').value.trim();
+    if (!key) return alert('Set API key first');
+    await fetch('/api/presets', { method:'POST', headers:{'Content-Type':'application/json','X-API-Key':key}, body:JSON.stringify({name}) });
+    document.getElementById('preset_name').value = '';
+    fetchPresets();
+  };
+  document.addEventListener('DOMContentLoaded', fetchPresets);
 </script>
-
 </body>
 </html>
