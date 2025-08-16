@@ -7,7 +7,7 @@
     body { 
       font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial; 
       margin: 12px; 
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      background: linear-gradient(135deg, #000000 0%, #764ba2 100%);
       min-height: 100vh;
     }
     header { 
@@ -258,8 +258,8 @@
       padding: 12px;
       background: #f0f9ff;
       border-radius: 6px;
-      border-left: 4px solid #0ea5e9;
       font-size: 13px;
+      border-left: 4px solid #0ea5e9;
     }
     .demo-info h4 {
       margin: 0 0 8px 0;
@@ -277,6 +277,35 @@
       font-family: 'Courier New', monospace;
       color: #0c4a6e;
     }
+
+    /* Stages + Parallel Machines */
+    .stage{
+      background:linear-gradient(135deg,#f1f5f9,#e2e8f0);
+      border:1px solid #e5e7eb;border-radius:12px;padding:16px;margin-bottom:12px
+    }
+    .stage-h{display:flex;gap:8px;align-items:center;justify-content:space-between;margin-bottom:10px}
+    .stage-left{display:flex;align-items:center;gap:8px}
+    .stage-q{background:#eef2ff;color:#4f46e5;border-radius:999px;padding:4px 10px;font-size:12px}
+    .stage-machines{
+      display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px
+    }
+    .machine-card{
+      background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:14px;position:relative
+    }
+    .machine-card::before{
+      content:"";position:absolute;left:0;top:0;height:4px;width:100%;background:linear-gradient(90deg,#10b981,#059669)
+    }
+    .machine-card.off::before{background:linear-gradient(90deg,#ef4444,#dc2626)}
+    .mc-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+    .mc-id{font-weight:600}
+    .badge{font-size:11px;padding:3px 8px;border-radius:999px;text-transform:uppercase}
+    .badge.on{background:#ecfdf5;color:#059669}
+    .badge.off{background:#fee2e2;color:#dc2626}
+    .mc-stats{display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:12px;color:#374151}
+    .mc-row{display:flex;justify-content:space-between}
+    .mc-actions{display:flex;gap:8px;margin-top:8px}
+    .stage-actions{display:flex;gap:8px;align-items:center}
+    .mini-btn{padding:6px 10px;font-size:12px;margin:0}
   </style>
 </head>
 <body>
@@ -338,9 +367,10 @@
 
   <!-- Main Application -->
   <div id="mainApp" class="hidden">
-    <header>
+<header>
       <div style="display: flex; align-items: center; gap: 16px;">
-        <h1>🏭 Factory Floor Digital Twin Dashboard</h1>
+        <img src="/static/logo.png" alt="AutoX Logo" style="height: 50px;">
+        <h1>AutoX</h1>
         <div class="card" style="padding:12px;">
           <div><strong>Status:</strong> <span id="conn" class="connection-status disconnected">Disconnected</span></div>
           <div><strong>Active Shifts:</strong> <span id="shifts">-</span></div>
@@ -352,7 +382,6 @@
           <div><strong>User:</strong> <span id="currentUsername">-</span></div>
           <div><span id="currentUserRole" class="role-badge">-</span></div>
         </div>
-        <!-- New button to open the Streamlit dashboard in a new tab -->
         <button id="openPredictiveBtn" class="secondary">📈 AI Predictive Dashboard</button>
         <button id="logoutBtn" class="danger">Logout</button>
       </div>
@@ -386,11 +415,12 @@
           </div>
         </div>
 
+        <!-- New Stages View (parallel machines per stage) -->
         <div class="card">
-          <h3>🔧 Production Machines</h3>
-          <div class="machines" id="machines">
+          <h3>🧱 Production Stages</h3>
+          <div id="stages_view">
             <div style="text-align: center; padding: 20px; color: #6b7280;">
-              Loading machines...
+              Loading stages...
             </div>
           </div>
         </div>
@@ -444,8 +474,8 @@
             <select id="move_select">
               <option>Select machine...</option>
             </select>
-            <input type="number" id="move_pos" min="1" max="10" value="1" placeholder="Position"/>
-            <button id="move_btn">🚚 Move Equipment</button>
+            <input type="number" id="move_pos" min="1" value="1" placeholder="Stage"/>
+            <button id="move_btn">🚚 Move To Stage</button>
           </div>
 
           <div class="control-section">
@@ -458,11 +488,20 @@
           </div>
 
           <div class="control-section">
-            <label>➕ Add New Machine</label>
+            <label>➕ Add New Stage With Machine</label>
             <input type="text" id="new_name" placeholder="Machine name" value="New Station"/>
             <input type="number" id="new_rate" placeholder="Items/min" value="45" min="1" max="200"/>
-            <input type="number" id="new_position" placeholder="Position" value="1" min="1"/>
-            <button id="add_machine">🏭 Add Machine</button>
+            <button id="add_machine">🏭 Add Stage + Machine</button>
+          </div>
+
+          <div class="control-section">
+            <label>➕ Add Parallel Machine To Stage</label>
+            <select id="stage_select_parallel">
+              <option>Select stage...</option>
+            </select>
+            <input type="text" id="new_parallel_id" placeholder="Machine ID (optional)" />
+            <input type="number" id="new_parallel_rate" placeholder="Items/min" value="50" min="1" max="200"/>
+            <button id="add_parallel_machine" class="secondary">➕ Add Parallel</button>
           </div>
 
           <div class="control-section">
@@ -482,7 +521,7 @@
     </main>
 
     <footer>
-      🚀 Enhanced factory digital twin with authentication, role-based access control, and advanced monitoring
+      🚀 Enhanced factory digital twin with authentication, role-based access control, advanced monitoring, and staged parallel machines
     </footer>
   </div>
 
@@ -491,6 +530,7 @@
   let currentUser = null;
   let authToken = null;
   let machines_data = [];
+  let stages_data = [];
 
   // Authentication functions
   function getStoredToken() {
@@ -542,9 +582,7 @@
     try {
       const response = await fetch('/api/token', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password })
       });
 
@@ -572,9 +610,7 @@
     try {
       const response = await fetch('/api/register', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password, role })
       });
 
@@ -583,7 +619,7 @@
         throw new Error(error.detail || 'Registration failed');
       }
 
-      const data = await response.json();
+      await response.json();
       document.getElementById('registerSuccess').textContent = 'Registration successful! You can now login.';
       document.getElementById('registerSuccess').classList.remove('hidden');
       document.getElementById('registerError').classList.add('hidden');
@@ -624,9 +660,7 @@
 
     try {
       const response = await fetch('/api/me', {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
+        headers: { 'Authorization': `Bearer ${token}` }
       });
 
       if (response.ok) {
@@ -650,20 +684,16 @@
   function connect() {
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${protocol}//${location.host}/ws${authToken ? `?token=${authToken}` : ''}`;
-    console.log('Connecting to WebSocket:', wsUrl);
-    
     ws = new WebSocket(wsUrl);
     
     ws.onopen = () => {
       document.getElementById('conn').innerText = 'Connected';
       document.getElementById('conn').className = 'connection-status connected';
-      console.log('WebSocket connected');
     };
     
     ws.onclose = () => {
       document.getElementById('conn').innerText = 'Disconnected';
       document.getElementById('conn').className = 'connection-status disconnected';
-      console.log('WebSocket disconnected, attempting to reconnect...');
       if (currentUser) {
         setTimeout(connect, 2000);
       }
@@ -676,15 +706,16 @@
     ws.onmessage = (evt) => {
       try {
         const obj = JSON.parse(evt.data);
-        console.log('Received message:', obj);
-        
         if (obj.type === 'metrics') {
           renderMetrics(obj.payload);
         } else if (obj.type === 'machines_updated') {
           machines_data = obj.machines || [];
+          stages_data = obj.stages || [];
           updateMachineSelectors();
+          updateStageSelector();
+          renderStages(stages_data);
         } else if (obj.type === 'auth_status') {
-          console.log('Auth status:', obj.payload);
+          // no-op
         } else if (obj.type === 'error') {
           console.error('Server error:', obj.payload);
           if (obj.payload.includes('authentication required') || obj.payload.includes('admin access required')) {
@@ -709,7 +740,6 @@
       alert("WebSocket not connected. Please wait for connection.");
       return;
     }
-    console.log('Sending action:', actionObj);
     ws.send(JSON.stringify(actionObj));
   }
 
@@ -731,55 +761,125 @@
     document.getElementById('shifts').innerText = `${payload.staffing_shifts} shift${payload.staffing_shifts > 1 ? 's' : ''}`;
 
     machines_data = payload.machines || [];
-    renderMachines(machines_data);
+    stages_data = payload.stages || [];
+    renderStages(stages_data);
     updateMachineSelectors();
+    updateStageSelector();
   }
 
-  function renderMachines(machines) {
-    const machinesDiv = document.getElementById('machines');
-    
-    if (!machines || machines.length === 0) {
-      machinesDiv.innerHTML = '<div style="text-align: center; padding: 20px; color: #6b7280;">No machines available</div>';
+  function addParallelAtStage(stageId) {
+    if (!currentUser || currentUser.role !== 'admin') {
+      alert('Admin access required');
       return;
     }
+    const name = prompt('Enter name for new parallel machine:', `Parallel @ Stage ${stageId}`);
+    if (name === null) return;
+    const rateStr = prompt('Enter base rate (items/min):', '50');
+    if (rateStr === null) return;
+    const rate = parseFloat(rateStr) || 50;
+    sendAction({
+      action: 'add_parallel_machine',
+      stage_index: stageId,
+      name: name,
+      base_rate: rate
+    });
+  }
 
-    machinesDiv.innerHTML = '';
+  async function deleteMachine(machineId) {
+    if (!currentUser || currentUser.role !== 'admin') {
+      alert('Admin access required');
+      return;
+    }
     
-    machines.forEach(m => {
-      const el = document.createElement('div');
-      el.className = `machine ${m.status === 'on' ? 'online' : 'offline'}`;
-      
-      const statusIcon = m.status === 'on' ? '🟢' : '🔴';
-      const queueStatus = m.queue > 10 ? '⚠️' : m.queue > 5 ? '⚡' : '✅';
-      
-      el.innerHTML = `
-        <div>
-          <div style="font-weight: bold; font-size: 16px;">
-            ${statusIcon} ${m.name || m.id}
+    try {
+      const response = await fetch(`/api/machines/${machineId}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${authToken}` }
+      });
+      const data = await response.json();
+      document.getElementById('api_response').innerText = `Deleted: ${JSON.stringify(data, null, 2)}`;
+    } catch (error) {
+      document.getElementById('api_response').innerText = `Error: ${error.message}`;
+    }
+  }
+
+  function deleteMachineInline(machineId) {
+    if (!confirm(`Delete machine ${machineId}?`)) return;
+    deleteMachine(machineId);
+  }
+
+  function toggleMachineInline(machineId) {
+    sendAction({ action: 'toggle_machine', machine_id: machineId });
+  }
+
+  function renderStages(stages) {
+    const container = document.getElementById('stages_view');
+    if (!stages || stages.length === 0) {
+      container.innerHTML = '<div style="text-align: center; padding: 20px; color: #6b7280;">No stages available</div>';
+      return;
+    }
+    container.innerHTML = '';
+    stages.forEach(st => {
+      const s = document.createElement('div');
+      s.className = 'stage';
+
+      const h = document.createElement('div');
+      h.className = 'stage-h';
+
+      const left = document.createElement('div');
+      left.className = 'stage-left';
+      left.innerHTML = `<div><b>Stage ${st.id}</b></div><div class="stage-q">Input Queue: ${Number(st.input_queue ?? 0).toFixed(1)}</div>`;
+
+      const right = document.createElement('div');
+      right.className = 'stage-actions';
+      if (currentUser && currentUser.role === 'admin') {
+        const btn = document.createElement('button');
+        btn.className = 'mini-btn secondary';
+        btn.textContent = '➕ Add Parallel';
+        btn.onclick = () => addParallelAtStage(st.id);
+        right.appendChild(btn);
+      }
+
+      h.appendChild(left);
+      h.appendChild(right);
+
+      const mg = document.createElement('div');
+      mg.className = 'stage-machines';
+      (st.machines || []).forEach(m => {
+        const el = document.createElement('div');
+        el.className = 'machine-card' + (m.status === 'off' ? ' off' : '');
+        el.innerHTML = `
+          <div class="mc-head">
+            <div class="mc-id">${m.name || m.id}</div>
+            <span class="badge ${m.status==='on'?'on':'off'}">${m.status}</span>
           </div>
-          <div style="font-size: 12px; color: #6b7280; margin-top: 4px;">
-            Position: ${m.position} • Status: ${m.status.toUpperCase()}
+          <div class="mc-stats">
+            <div class="mc-row"><span>Queue</span><b>${Number(m.queue).toFixed(1)}</b></div>
+            <div class="mc-row"><span>Processed</span><b>${m.total_processed?.toLocaleString() || 0}</b></div>
+            <div class="mc-row"><span>Throughput</span><b>${Number(m.throughput_factor).toFixed(2)}x</b></div>
+            <div class="mc-row"><span>Uptime</span><b>${(Number(m.uptime)*100).toFixed(1)}%</b></div>
           </div>
-          <div style="font-size: 12px; color: #6b7280;">
-            Processed: ${m.total_processed?.toLocaleString() || 0} items
-          </div>
-        </div>
-        <div style="text-align: right;">
-          <div style="font-size: 14px; font-weight: 500;">
-            ${queueStatus} Queue: ${Math.round(m.queue * 10) / 10}
-          </div>
-          <div style="font-size: 12px; color: #6b7280;">
-            Rate: ${m.base_rate}/min
-          </div>
-          <div style="font-size: 12px; color: #6b7280;">
-            Efficiency: ${Math.round(m.throughput_factor * 100)}%
-          </div>
-          <div style="font-size: 12px; color: #6b7280;">
-            Uptime: ${Math.round(m.uptime * 100)}%
-          </div>
-        </div>
-      `;
-      machinesDiv.appendChild(el);
+        `;
+        if (currentUser && currentUser.role === 'admin') {
+          const actions = document.createElement('div');
+          actions.className = 'mc-actions';
+          const tBtn = document.createElement('button');
+          tBtn.className = 'mini-btn';
+          tBtn.textContent = '⚡ Toggle';
+          tBtn.onclick = () => toggleMachineInline(m.id);
+          const dBtn = document.createElement('button');
+          dBtn.className = 'mini-btn danger';
+          dBtn.textContent = '🗑️ Delete';
+          dBtn.onclick = () => deleteMachineInline(m.id);
+          actions.appendChild(tBtn);
+          actions.appendChild(dBtn);
+          el.appendChild(actions);
+        }
+        mg.appendChild(el);
+      });
+      s.appendChild(h);
+      s.appendChild(mg);
+      container.appendChild(s);
     });
   }
 
@@ -794,7 +894,8 @@
       machines_data.forEach(m => {
         const option = document.createElement('option');
         option.value = m.id;
-        option.text = `${m.name || m.id} (Pos: ${m.position})`;
+        const stage = m.stage_id ?? m.position ?? '?';
+        option.text = `${m.name || m.id} (Stage: ${stage})`;
         select.appendChild(option);
       });
       
@@ -804,36 +905,41 @@
     });
   }
 
+  function updateStageSelector() {
+    const select = document.getElementById('stage_select_parallel');
+    const keep = select.value;
+    select.innerHTML = '<option>Select stage...</option>';
+    (stages_data || []).forEach(st => {
+      const o = document.createElement('option');
+      o.value = st.id;
+      o.text = `Stage ${st.id}`;
+      select.appendChild(o);
+    });
+    if (keep) select.value = keep;
+  }
+
   // REST API functions
   async function fetchMachines() {
     try {
       const response = await fetch('/api/machines', {
-        headers: {
-          'Authorization': `Bearer ${authToken}`
-        }
+        headers: { 'Authorization': `Bearer ${authToken}` }
       });
       const data = await response.json();
       document.getElementById('api_response').innerText = JSON.stringify(data, null, 2);
-      console.log('Fetched machines:', data);
     } catch (error) {
       document.getElementById('api_response').innerText = `Error: ${error.message}`;
-      console.error('Error fetching machines:', error);
     }
   }
 
   async function fetchPresets() {
     try {
       const response = await fetch('/api/presets', {
-        headers: {
-          'Authorization': `Bearer ${authToken}`
-        }
+        headers: { 'Authorization': `Bearer ${authToken}` }
       });
       const data = await response.json();
       renderPresets(data);
-      console.log('Fetched presets:', data);
     } catch (error) {
       document.getElementById('preset_list').innerHTML = '<div style="color: #ef4444;">Error loading presets</div>';
-      console.error('Error fetching presets:', error);
     }
   }
 
@@ -881,8 +987,8 @@
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${authToken}`
-        }
-      , body: JSON.stringify({
+        },
+        body: JSON.stringify({
           name: name,
           description: `Saved on ${new Date().toLocaleString()}`
         })
@@ -911,9 +1017,7 @@
     try {
       const response = await fetch(`/api/presets/${presetId}/load`, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${authToken}`
-        }
+        headers: { 'Authorization': `Bearer ${authToken}` }
       });
 
       if (response.ok) {
@@ -942,9 +1046,7 @@
     try {
       const response = await fetch(`/api/presets/${presetId}`, {
         method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${authToken}`
-        }
+        headers: { 'Authorization': `Bearer ${authToken}` }
       });
 
       if (response.ok) {
@@ -957,28 +1059,6 @@
     } catch (error) {
       console.error('Error deleting preset:', error);
       alert('Error deleting preset');
-    }
-  }
-
-  async function deleteMachine(machineId) {
-    if (!currentUser || currentUser.role !== 'admin') {
-      alert('Admin access required');
-      return;
-    }
-    
-    try {
-      const response = await fetch(`/api/machines/${machineId}`, {
-        method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${authToken}`
-        }
-      });
-      const data = await response.json();
-      document.getElementById('api_response').innerText = `Deleted: ${JSON.stringify(data, null, 2)}`;
-      console.log('Deleted machine:', data);
-    } catch (error) {
-      document.getElementById('api_response').innerText = `Error: ${error.message}`;
-      console.error('Error deleting machine:', error);
     }
   }
 
@@ -1090,15 +1170,30 @@
     document.getElementById('add_machine').onclick = () => {
       const name = document.getElementById('new_name').value || `Machine_${Date.now()}`;
       const rate = parseFloat(document.getElementById('new_rate').value || 50);
-      const position = parseInt(document.getElementById('new_position').value || 1);
-      
+      // Add as a new stage with this machine
       sendAction({
         action:'add_machine', 
         machine_id: `M_${Date.now()}`,
         name: name,
-        base_rate: rate, 
-        position: position
+        base_rate: rate
       });
+    };
+
+    document.getElementById('add_parallel_machine').onclick = () => {
+      const stageIndex = parseInt(document.getElementById('stage_select_parallel').value || '0', 10);
+      if (!stageIndex) {
+        alert('Please select a stage');
+        return;
+      }
+      const id = (document.getElementById('new_parallel_id').value || '').trim() || undefined;
+      const rate = parseFloat(document.getElementById('new_parallel_rate').value || '50');
+      sendAction({
+        action: 'add_parallel_machine',
+        stage_index: stageIndex,
+        machine_id: id,
+        base_rate: rate
+      });
+      document.getElementById('new_parallel_id').value = '';
     };
 
     document.getElementById('reset_simulation').onclick = () => {
@@ -1126,4 +1221,4 @@
   });
 </script>
 </body>
-</html>
+</html>```
