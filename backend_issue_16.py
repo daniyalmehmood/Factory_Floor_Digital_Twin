@@ -441,3 +441,4 @@ async def load_preset(preset_id: int, x_api_key: str = Header(None)):
     twin_state.clear(); twin_state.update(saved_ts)
     twin_state["time"] = now_utc_iso()
     return {"ok": True}
+
