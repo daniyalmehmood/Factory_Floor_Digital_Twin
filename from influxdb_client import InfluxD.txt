@@ -1,0 +1,38 @@
+from influxdb_client import InfluxDBClient, Point
+from influxdb_client.client.write_api import SYNCHRONOUS
+from dotenv import load_dotenv
+from datetime import datetime, timezone
+from pathlib import Path
+import os, sys
+
+# حمّل .env من نفس مجلد الملف
+BASE = Path(__file__).resolve().parent
+load_dotenv(BASE / ".env")
+
+URL    = os.getenv("INFLUX_URL", "http://localhost:8086")
+ORG    = os.getenv("d8893e612988b9f6")          # يجب أن يكون Org ID
+BUCKET = os.getenv("INFLUX_BUCKET", "twin")
+TOKEN  = os.getenv("INFLUX_TOKEN")
+
+print("URL:", URL)
+print("ORG:", ORG)
+print("BUCKET:", BUCKET)
+print("TOKEN prefix:", (TOKEN or "")[:6])
+
+# تأكد أن القيم موجودة قبل الإرسال
+if not ORG or not TOKEN:
+    sys.exit("❌ القيم ناقصة: تأكدي من INFLUX_ORG و INFLUX_TOKEN داخل .env")
+
+client = InfluxDBClient(url=URL, token=TOKEN, org=ORG)
+print("Health:", client.health().status)   # لازم pass
+
+write_api = client.write_api(write_options=SYNCHRONOUS)
+p = (Point("telemetry_raw")
+     .tag("line_id","L1").tag("machine_id","M01")
+     .field("total_output", 123).field("uptime_sec", 456).field("status_code", 1)
+     .time(datetime.now(timezone.utc)))
+
+# مهم: مرّري org بشكل صريح
+write_api.write(bucket=BUCKET, org=ORG, record=p)
+client.close()
+print("✅ wrote 1 point")
